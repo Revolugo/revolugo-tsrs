@@ -182,6 +182,7 @@ tsrs-only variables that change behavior:
 | `TSRS_LAZY_DTS` | off; on in eligible fast-mode compilations | `1` enables lazy declaration member parsing; `0` / `off` disables it even in fast mode. Requires skipped declaration checking; unavailable in watch, LSP and API modes |
 | `TSRS_LIB_PATH` | unset | Directory to load the default libs from |
 | `TSRS_LINT_RUN_EXTERNAL_CODE` | off | Only `1` gives `tsrs --lint` / `tsrs-lint` `--runExternalCode`, so tsconfig `contentMappers` run under oxlint |
+| `TSRS_LINT_PROJECT` | unset | `tsrs --lint` / `tsrs-lint` `--project <tsconfig>` (revolugo fork): each file is linted in the project that has it among this tsconfig and those it references, before the tsconfig nearest to the file is looked for |
 | `TSRS_WATCH_BACKEND` | unset | `kqueue` uses the macOS fallback watcher |
 | `TSRS_BINARY` | unset | Path of the binary the npm launcher runs |
 | `RAYON_NUM_THREADS` | `min(available parallelism, 32)` | Parse thread count |

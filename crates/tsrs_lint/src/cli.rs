@@ -33,7 +33,7 @@ pub fn main(args: Vec<String>) -> i32 {
     }
 }
 
-/// Parses `headless [--fix] [--fix-suggestions] [--runExternalCode] [--debug timings]`.
+/// Parses `headless [--fix] [--fix-suggestions] [--runExternalCode] [--project <tsconfig>] [--debug timings]`.
 ///
 /// Reads the payload from `input`, lints it from the current directory and writes the frames to `output`. Returns
 /// the exit status.
@@ -50,6 +50,11 @@ pub fn run(
         // oxlint runs `<path> headless` with flags of its own, so `--runExternalCode` has an environment form.
         run_external_code: std::env::var("TSRS_LINT_RUN_EXTERNAL_CODE")
             .is_ok_and(|value| value == "1"),
+        // Like `--runExternalCode`, `--project` has an environment form for oxlint's runs.
+        project: std::env::var("TSRS_LINT_PROJECT")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .map(leak),
         ..Default::default()
     };
     let mut headless = false;
@@ -60,6 +65,13 @@ pub fn run(
             "-fix" | "--fix" => options.fix = true,
             "-fix-suggestions" | "--fix-suggestions" => options.fix_suggestions = true,
             "-runExternalCode" | "--runExternalCode" => options.run_external_code = true,
+            "-p" | "-project" | "--project" => {
+                let Some(project) = args.next() else {
+                    eprintln!("--project requires a tsconfig");
+                    return 1;
+                };
+                options.project = Some(leak(project));
+            }
             "-debug" | "--debug" => {
                 if args.next().as_deref() == Some("timings") {
                     options.debug_timings = true;
@@ -70,7 +82,7 @@ pub fn run(
             }
             "--help" | "-h" => {
                 eprintln!(
-                    "Usage: tsrs-lint headless [--fix] [--fix-suggestions] [--runExternalCode] [--debug timings]"
+                    "Usage: tsrs-lint headless [--fix] [--fix-suggestions] [--runExternalCode] [--project <tsconfig>] [--debug timings]"
                 );
                 return 0;
             }
@@ -108,4 +120,9 @@ pub fn run(
         return 1;
     }
     code
+}
+
+/// `engine::Options` is `Copy`, so the one `--project` of a run is kept for the rest of the process.
+fn leak(value: String) -> &'static str {
+    Box::leak(value.into_boxed_str())
 }

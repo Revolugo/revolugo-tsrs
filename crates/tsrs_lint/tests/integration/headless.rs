@@ -7282,6 +7282,158 @@ fn run_external_code_lints_content_mapped_projects() {
     }
 }
 
+// The diagnostics of a run, as objects.
+fn diagnostic_objects(input: &str, flags: &[&str], env: &[(&str, &str)]) -> Vec<JsonMap> {
+    let (status, frames) = run_raw_with_env(input, flags, env);
+    assert_eq!(status, 0, "{frames:?}");
+    frames
+        .into_iter()
+        .map(|(_, value)| {
+            let Value::Object(diagnostic) = value else { panic!("{value:?}") };
+            diagnostic
+        })
+        .collect()
+}
+
+fn range_of(value: &Value) -> (usize, usize) {
+    let Value::Object(owner) = value else { panic!("{value:?}") };
+    let Value::Object(range) = &owner["range"] else { panic!("{value:?}") };
+    let [Value::Number(pos), Value::Number(end)] = [&range["pos"], &range["end"]] else {
+        panic!("{value:?}")
+    };
+    (*pos as usize, *end as usize)
+}
+
+#[test]
+fn rules_run_on_content_mapped_files_at_their_original_ranges() {
+    // The header mapper of testdata/contentmapper, with a header that has a violation of its own: `await 1` in
+    // synthesized code. a.vue has the same violation in its own text, after the header in the virtual text.
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/contentmapper");
+    let base = std::env::current_dir().unwrap().join("target/lint-mapped-rules");
+    let mapper = std::fs::read_to_string(fixtures.join("header-mapper/mapper.mjs")).unwrap();
+    let header = "'// synthesized by header-mapper\\nexport {};\\n'";
+    assert!(mapper.contains(header), "the header of header-mapper changed");
+    let mapper = mapper
+        .replace(header, "'export async function synthesized(): Promise<void> { await 1 }\\n'");
+    let original = "export async function written(): Promise<void> {\n  await 2\n}\n";
+    for (to, text) in [
+        (
+            "tsconfig.json",
+            std::fs::read_to_string(fixtures.join("types/tsconfig.json")).unwrap().as_str(),
+        ),
+        ("src/a.vue", original),
+        (
+            "node_modules/header-mapper/package.json",
+            std::fs::read_to_string(fixtures.join("header-mapper/package.json")).unwrap().as_str(),
+        ),
+        ("node_modules/header-mapper/mapper.mjs", mapper.as_str()),
+    ] {
+        let to = base.join(to);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::write(to, text).unwrap();
+    }
+    let file = base.join("src/a.vue").to_string_lossy().into_owned();
+    let input = json::marshal(&protocol::object([
+        ("version", Value::Integer(2)),
+        (
+            "configs",
+            Value::Array(vec![protocol::object([
+                ("file_paths", Value::Array(vec![Value::String(file.clone())])),
+                (
+                    "rules",
+                    Value::Array(vec![protocol::object([(
+                        "name",
+                        Value::String("await-thenable".into()),
+                    )])]),
+                ),
+            ])]),
+        ),
+    ]))
+    .unwrap();
+
+    // Only the violation that a.vue has is reported, where a.vue has it.
+    let diagnostics = diagnostic_objects(&input, &["--runExternalCode", "--fix-suggestions"], &[]);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic["rule"], Value::String("await-thenable".into()));
+    assert_eq!(diagnostic["file_path"], Value::String(file));
+    let pos = original.find("await 2").unwrap();
+    assert_eq!(range_of(&Value::Object(diagnostic.clone())), (pos, pos + "await".len()));
+
+    // Its suggestion removes `await`, in the text of a.vue.
+    let Value::Array(suggestions) = &diagnostic["suggestions"] else { panic!("{diagnostic:?}") };
+    assert_eq!(suggestions.len(), 1, "{diagnostic:?}");
+    let Value::Object(suggestion) = &suggestions[0] else { panic!("{diagnostic:?}") };
+    let Value::Array(fixes) = &suggestion["fixes"] else { panic!("{diagnostic:?}") };
+    assert_eq!(fixes.len(), 1, "{diagnostic:?}");
+    assert_eq!(range_of(&fixes[0]), (pos, pos + "await ".len()), "{diagnostic:?}");
+}
+
+#[test]
+fn project_lints_a_file_in_the_named_solution_before_its_nearest_tsconfig() {
+    // src/index.ts has an error under `strict` only. The tsconfig nearest to it is not strict; `check/` is a solution
+    // whose referenced project is, over the same file.
+    let base = std::env::current_dir().unwrap().join("target/lint-project");
+    for (to, text) in [
+        (
+            "tsconfig.json",
+            r#"{ "compilerOptions": { "strict": false, "noEmit": true, "types": [] }, "include": ["src"] }"#,
+        ),
+        ("check/tsconfig.json", r#"{ "files": [], "references": [{ "path": "./strict" }] }"#),
+        (
+            "check/strict/tsconfig.json",
+            r#"{ "compilerOptions": { "strict": true, "composite": true, "noEmit": true, "types": [] }, "include": ["../../src"] }"#,
+        ),
+        ("src/index.ts", "export const name: string = null\n"),
+    ] {
+        let to = base.join(to);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::write(to, text).unwrap();
+    }
+    let file = base.join("src/index.ts").to_string_lossy().into_owned();
+    let input = json::marshal(&protocol::object([
+        ("version", Value::Integer(2)),
+        (
+            "configs",
+            Value::Array(vec![protocol::object([
+                ("file_paths", Value::Array(vec![Value::String(file)])),
+                ("rules", Value::Array(Vec::new())),
+            ])]),
+        ),
+        ("report_semantic", Value::Bool(true)),
+    ]))
+    .unwrap();
+    let ids = |flags: &[&str], env: &[(&str, &str)]| {
+        diagnostic_objects(&input, flags, env)
+            .iter()
+            .map(|diagnostic| {
+                let Value::Object(message) = &diagnostic["message"] else {
+                    panic!("{diagnostic:?}")
+                };
+                message["id"].clone()
+            })
+            .collect::<Vec<_>>()
+    };
+    let solution = base.join("check/tsconfig.json").to_string_lossy().into_owned();
+    let directory = base.join("check").to_string_lossy().into_owned();
+
+    assert_eq!(ids(&[], &[]), Vec::<Value>::new());
+    let strict = vec![Value::String("TS2322".into())];
+    assert_eq!(ids(&["--project", &solution], &[]), strict);
+    // A directory stands for its tsconfig.json, and the environment for the flag.
+    assert_eq!(ids(&["-p", &directory], &[]), strict);
+    assert_eq!(ids(&[], &[("TSRS_LINT_PROJECT", &solution)]), strict);
+
+    // A project that is not there is an error: the file would be linted elsewhere without notice.
+    let missing = base.join("missing/tsconfig.json").to_string_lossy().into_owned();
+    let (status, frames) = run_raw(&input, &["--project", &missing]);
+    assert_eq!(status, 1, "{frames:?}");
+    let Value::Object(error) = &frames[0].1 else { panic!("{frames:?}") };
+    let Value::String(text) = &error["error"] else { panic!("{frames:?}") };
+    assert!(text.contains("--project: cannot find a tsconfig at"), "{text}");
+}
+
 #[test]
 fn a_content_mapper_that_cannot_be_initialized_is_reported_with_the_reason() {
     // The help of TS18099 had only its first line, "could not be initialized", so a mapper process that exited

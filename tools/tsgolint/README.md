@@ -87,6 +87,33 @@ files) and global diagnostics are checked only by `tsrs --noEmit` or `tsrs --bui
 [measurements](../../notes/perf-tsgolint-check-program.md) of one lint and typecheck run were taken when the lint run
 checked whole tsconfig programs.
 
+## Content-mapped files and `--project` (revolugo fork)
+
+Upstream runs no rule on a content-mapped file (`.vue` through a tsconfig `contentMappers` entry): a rule sees the
+mapper's virtual text, whose ranges are not those of the file on disk. This fork runs the rules and maps each
+diagnostic back with the file's span map:
+
+- a diagnostic is reported when its range lies in one verbatim segment, at the original range. A diagnostic in code the
+  mapper synthesized, or on a node that spans synthesized code, is dropped: it would point at text nobody wrote;
+- labels that do not map exactly are left out;
+- fixes and suggestions are kept when each of their ranges maps exactly, as an edit written back to the original
+  requires. Otherwise the diagnostic is reported without them.
+
+Oxlint sends no content-mapped file, so the payload comes from elsewhere: any client of the headless protocol can name
+`.vue` files in `file_paths`.
+
+```sh
+printf '%s' '{"version":2,"configs":[{"file_paths":["/abs/src/App.vue"],"rules":[{"name":"no-floating-promises"}]}]}' \
+  | tsrs-lint headless --runExternalCode --project tools/typecheck/tsconfig.json
+```
+
+`--project <tsconfig>` (or `TSRS_LINT_PROJECT`, for oxlint's runs) names the solution a run lints with. Each file is
+looked for in that tsconfig and, breadth first, in the projects it references; the file is linted in the first project
+that has it as a root file. A file that none has falls back to the tsconfig nearest to it, as without the option. It is
+for repositories whose type-check projects are not the tsconfigs next to the sources (a `tsc -b` entry point that adds
+content mappers, for instance), so that the lint sees the types the type check sees. A directory stands for its
+`tsconfig.json`; a tsconfig that does not exist is an error.
+
 Run imported suites with:
 
 ```sh

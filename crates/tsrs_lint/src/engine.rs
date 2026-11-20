@@ -20,7 +20,9 @@ use tsrs_tsoptions::{ParseConfigHost, ParsedCommandLine};
 use tsrs_vfs::{FS, bundled, cachedvfs, osvfs, wrapvfs};
 
 use crate::payload::{ConfiguredRule, Payload};
-use crate::protocol::{self, Diagnostic, MessageType, Range, RuleMessage};
+use crate::protocol::{
+    self, Diagnostic, Fix, LabeledRange, MessageType, Range, RuleMessage, Suggestion,
+};
 use crate::rule::{RuleContext, visit_lint_nodes};
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -31,6 +33,10 @@ pub struct Options {
     pub suppress_program_diagnostics: bool,
     /// tsc's `--runExternalCode`: tsconfig `contentMappers` are kept and their mapper processes run.
     pub run_external_code: bool,
+    /// `--project`: a tsconfig whose project, or one of the projects it references, lints each file it has, before
+    /// the tsconfig nearest to the file is looked for. Relative to the current directory; a directory stands for its
+    /// `tsconfig.json`.
+    pub project: Option<&'static str>,
 }
 
 #[derive(Default)]
@@ -314,9 +320,15 @@ fn run_in_region(
         }
     }
     let mut config_cache = FxHashMap::default();
+    let project =
+        options.project.map(|project| project_config_path(project, cwd, host)).transpose()?;
     for path in file_configs.keys() {
         let resolved = tspath::get_normalized_absolute_path(path, cwd);
-        if let Some(config_path) = find_tsconfig(&resolved, host, &mut config_cache) {
+        let config_path = project
+            .as_deref()
+            .and_then(|project| find_in_project(&resolved, project, host, &mut config_cache))
+            .or_else(|| find_tsconfig(&resolved, host, &mut config_cache));
+        if let Some(config_path) = config_path {
             programs.entry(config_path).or_default().push(path.clone());
         } else {
             unmatched.push(path.clone());
@@ -639,15 +651,65 @@ fn lint_one(
             report_type_error(diagnostic, file, output)?;
         }
     }
-    // Rules see a content-mapped file's virtual text, whose ranges and fixes do not apply to the file on disk.
-    // oxlint does not send such files.
-    if configured.is_empty() || file.is_content_mapped() {
+    if configured.is_empty() {
         return Ok(());
     }
+    // Rules see a content-mapped file's virtual text, so their diagnostics are mapped back to the file on disk.
+    // oxlint does not send such files: a payload written for them does.
+    let mapped = file.is_content_mapped();
     for diagnostic in lint_file(program, file, configured, options, checker, timings)? {
-        emit(&diagnostic, output)?;
+        if !mapped {
+            emit(&diagnostic, output)?;
+        } else if let Some(diagnostic) = original_rule_diagnostic(diagnostic, file) {
+            emit(&diagnostic, output)?;
+        }
     }
     Ok(())
+}
+
+// A rule diagnostic on a content-mapped file, at its place in the original text. It is reported when its range lies
+// in one verbatim segment of the span map, which makes it a diagnostic about text the file has: a rule that reports
+// code the mapper synthesized, or a node that spans synthesized code, would point at text nobody wrote. Compiler
+// diagnostics are mapped more loosely (`original_range`), as `tsc` maps them. Labels that do not map exactly are left
+// out. Fixes and suggestions are kept when each of their ranges maps exactly, which a text edit written back to the
+// original requires (spanmap.go:86); a fix that needs synthesized code is dropped with the diagnostic kept.
+fn original_rule_diagnostic(mut diagnostic: Diagnostic, file: P<SourceFile>) -> Option<Diagnostic> {
+    let span_map = file.span_map();
+    let exact = |range: Range| {
+        let Some(span_map) = span_map else {
+            // No span map: the virtual text is the original (spanmap.go:241 with a nil receiver).
+            return Some(range);
+        };
+        let (loc, fidelity) = span_map
+            .virtual_to_original_span(tsrs_core::text::TextRange::new(range.pos, range.end));
+        if !fidelity.is_exact() {
+            return None;
+        }
+        Some(Range { pos: loc.source_pos()?, end: loc.source_end()? })
+    };
+    let exact_fixes = |fixes: Vec<Fix>| {
+        fixes
+            .into_iter()
+            .map(|fix| Some(Fix { range: exact(fix.range)?, text: fix.text }))
+            .collect::<Option<Vec<_>>>()
+    };
+    if let Some(range) = diagnostic.range {
+        diagnostic.range = Some(exact(range)?);
+    }
+    diagnostic.labeled_ranges = diagnostic
+        .labeled_ranges
+        .into_iter()
+        .filter_map(|label| Some(LabeledRange { range: exact(label.range)?, label: label.label }))
+        .collect();
+    diagnostic.fixes = exact_fixes(diagnostic.fixes).unwrap_or_default();
+    diagnostic.suggestions = diagnostic
+        .suggestions
+        .into_iter()
+        .filter_map(|suggestion| {
+            Some(Suggestion { fixes: exact_fixes(suggestion.fixes)?, message: suggestion.message })
+        })
+        .collect();
+    Some(diagnostic)
 }
 
 fn merge_timings(into: &mut BTreeMap<String, (u64, u64)>, from: BTreeMap<String, (u64, u64)>) {
@@ -837,34 +899,15 @@ pub fn find_tsconfig(
             }
             let config_path_key =
                 tspath::to_path(&path, &host.cwd, host.fs.use_case_sensitive_file_names());
-            let config = configs.entry(config_path_key).or_insert_with(|| {
-                let (config, diagnostics) = tsrs_tsoptions::get_parsed_command_line_of_config_file(
-                    &path,
-                    host.existing_options.as_ref(),
-                    None,
-                    host,
-                    None,
-                );
-                if !diagnostics.is_empty() {
-                    return None;
-                }
-                config.filter(|config| {
-                    config.config_file.is_none_or(|file| file.source_file.diagnostics().is_empty())
-                })
-            });
+            let config =
+                configs.entry(config_path_key).or_insert_with(|| parse_tsconfig(&path, host));
             if let Some(config) = config {
                 if path == config_path {
                     disable_solution_searching = config
                         .compiler_options()
                         .is_some_and(|options| options.disable_solution_searching.is_true());
                 }
-                if !config.file_names().is_empty()
-                    && (config
-                        .compiler_options()
-                        .is_none_or(|options| !options.composite.is_true())
-                        || config.possibly_matches_file_name(file))
-                    && config.file_names_by_path().contains_key(&file_path)
-                {
+                if config_has_file(config, file, &file_path) {
                     return Some(path);
                 }
                 queue.extend(config.resolved_project_reference_paths().iter().cloned());
@@ -874,6 +917,74 @@ pub fn find_tsconfig(
             return None;
         }
         next = compute_config_file_name(&config_path, true, host);
+    }
+    None
+}
+
+// A tsconfig as `find_tsconfig` and `find_in_project` read it: none when it cannot be read or has errors.
+fn parse_tsconfig(path: &str, host: &ConfigHost) -> Option<ParsedCommandLine> {
+    let (config, diagnostics) = tsrs_tsoptions::get_parsed_command_line_of_config_file(
+        path,
+        host.existing_options.as_ref(),
+        None,
+        host,
+        None,
+    );
+    if !diagnostics.is_empty() {
+        return None;
+    }
+    config.filter(|config| {
+        config.config_file.is_none_or(|file| file.source_file.diagnostics().is_empty())
+    })
+}
+
+// Whether `file` is one of the root files of `config`.
+fn config_has_file(config: &ParsedCommandLine, file: &str, file_path: &tspath::Path) -> bool {
+    !config.file_names().is_empty()
+        && (config.compiler_options().is_none_or(|options| !options.composite.is_true())
+            || config.possibly_matches_file_name(file))
+        && config.file_names_by_path().contains_key(file_path)
+}
+
+// `--project` as a tsconfig path: absolute, and a directory's `tsconfig.json`. A tsconfig that is missing is an
+// error, since the files would otherwise be linted in other projects without notice.
+fn project_config_path(project: &str, cwd: &str, host: &ConfigHost) -> Result<String, String> {
+    let mut path = tspath::get_normalized_absolute_path(project, cwd);
+    if host.fs.directory_exists(&path) {
+        path = tspath::combine_paths(&path, &["tsconfig.json"]);
+    }
+    if !host.fs.file_exists(&path) {
+        return Err(format!("--project: cannot find a tsconfig at '{path}'"));
+    }
+    Ok(path)
+}
+
+/// The tsconfig that has `file` among `project` and the projects it references (`--project`).
+///
+/// Breadth first, as `find_tsconfig` searches the solution nearest to a file.
+#[expect(clippy::implicit_hasher, reason = "Public for the integration tests.")]
+pub fn find_in_project(
+    file: &str,
+    project: &str,
+    host: &ConfigHost,
+    configs: &mut FxHashMap<tspath::Path, Option<ParsedCommandLine>>,
+) -> Option<String> {
+    let file_path = tspath::to_path(file, &host.cwd, host.fs.use_case_sensitive_file_names());
+    let mut visited = FxHashSet::default();
+    let mut queue = VecDeque::from([project.to_owned()]);
+    while let Some(path) = queue.pop_front() {
+        if !visited.insert(path.clone()) {
+            continue;
+        }
+        let config_path_key =
+            tspath::to_path(&path, &host.cwd, host.fs.use_case_sensitive_file_names());
+        let config = configs.entry(config_path_key).or_insert_with(|| parse_tsconfig(&path, host));
+        if let Some(config) = config {
+            if config_has_file(config, file, &file_path) {
+                return Some(path);
+            }
+            queue.extend(config.resolved_project_reference_paths().iter().cloned());
+        }
     }
     None
 }
