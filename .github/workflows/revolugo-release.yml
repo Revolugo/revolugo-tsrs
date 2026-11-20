@@ -1,0 +1,148 @@
+# Releases the revolugo fork: the `tsrs` npm package and its platform packages, as tarballs attached to a GitHub
+# release. Nothing is published to npm: a consumer installs the tarballs by URL (REVOLUGO.md).
+#
+# The builds follow release.yml (same toolchain actions, `noembed` binaries packed by npm/build.mjs), without its
+# profile-guided optimization, BOLT, conformance gates, Windows, Intel macOS and WebAssembly jobs: the fork ships what
+# the Revolugo monorepo installs (macOS arm64 for development, Linux for CI and the images).
+name: Revolugo release
+
+permissions: {}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v7.1.0-beta.tsrs3-revolugo.1"
+        required: true
+        type: string
+
+env:
+  TSRS_CARGO_FEATURES: tsrs_cli/noembed
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          # Built on 22.04 so the binary needs at most glibc 2.35.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+    steps:
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
+
+      - uses: oxc-project/setup-rust@3d6fb132fbe7cdcb66bf8ec193911c2945369d12 # v1.0.17
+        with:
+          restore-cache: false
+
+      - name: Build and stage the binary
+        shell: bash
+        env:
+          TSRS_LIB_PATH: ${{ github.workspace }}/crates/tsrs_vfs/libs
+        run: |
+          rustup target add ${{ matrix.target }}
+          cargo build --release --locked -p tsrs_cli --features "$TSRS_CARGO_FEATURES" --target ${{ matrix.target }}
+          mkdir -p "out/${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/tsrs" "out/${{ matrix.target }}/tsrs"
+          "out/${{ matrix.target }}/tsrs" --version
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bin-${{ matrix.target }}
+          path: out/
+          if-no-files-found: error
+
+  build-musl:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-26.04-arm }
+    steps:
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
+
+      - uses: oxc-project/setup-rust@3d6fb132fbe7cdcb66bf8ec193911c2945369d12 # v1.0.17
+        with:
+          restore-cache: false
+
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-zigbuild@0.24.0
+          fallback: none
+
+      - uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
+        with:
+          version: 0.13.0
+
+      - name: Build and stage the musl binary
+        env:
+          TSRS_LIB_PATH: ${{ github.workspace }}/crates/tsrs_vfs/libs
+        run: |
+          rustup target add ${{ matrix.target }}
+          cargo zigbuild --release --locked -p tsrs_cli --features "$TSRS_CARGO_FEATURES" --target ${{ matrix.target }}
+          mkdir -p "out/${{ matrix.target }}"
+          cp "target/${{ matrix.target }}/release/tsrs" "out/${{ matrix.target }}/tsrs"
+          "out/${{ matrix.target }}/tsrs" --version
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bin-${{ matrix.target }}
+          path: out/
+          if-no-files-found: error
+
+  release:
+    needs: [build, build-musl]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # creates the release and its tag
+    steps:
+      - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
+
+      - uses: oxc-project/setup-node@f46a72f95efdc55273fcd042d61c84e723b2892c # v1.4.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bin-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Require the release platforms
+        run: |
+          for t in aarch64-apple-darwin x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+            x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            test -f "artifacts/$t/tsrs" || { echo "::error::missing binary for $t"; exit 1; }
+          done
+          chmod +x artifacts/*/tsrs
+
+      # `v<version>-revolugo.<n>` gives the packages the version `<version>-revolugo.<n>`: the main package then asks
+      # for platform packages that only this release has, never upstream's on the registry.
+      - name: Assemble and pack
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          version=$(node npm/build.mjs --print-version)
+          suffix=${TAG#"v$version"}
+          case "$suffix" in
+            -revolugo.[0-9]*) ;;
+            *) echo "::error::the tag must be v$version-revolugo.<n>"; exit 1 ;;
+          esac
+          node npm/build.mjs --artifacts artifacts --pack --version-suffix "$suffix"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release create "$TAG" npm/dist/*.tgz \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes "The tsrs npm package and its platform packages, built from $GITHUB_SHA. Install them by URL: see REVOLUGO.md."

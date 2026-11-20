@@ -45,6 +45,7 @@ function usage(message) {
     if (message) console.error(`error: ${message}\n`);
     console.error(
         "usage: node npm/build.mjs [--binary <triple>=<path>]... [--artifacts <dir>] [--out <dir>] [--pack] [--tsc <path>]\n" +
+            "                          [--version-suffix <suffix>]\n" +
             "                          [--wasm <tsrs.wasm>] [--sdk-only]\n" +
             "                          [--check-tag <git tag>] [--print-version | --print-crate-version | --print-typescript-commit | --print-typescript-nightly]\n" +
             `triples: ${Object.keys(TARGETS).join(", ")}`,
@@ -77,6 +78,10 @@ function parseArgs(argv) {
             }
             case "--wasm":
                 opts.wasm = path.resolve(value());
+                break;
+            // A fork's packages: `<version><suffix>`, so that the registry cannot answer for a platform package.
+            case "--version-suffix":
+                opts.versionSuffix = value();
                 break;
             case "--out":
                 opts.out = path.resolve(value());
@@ -227,7 +232,7 @@ function pnpmPack(dir, out) {
 function main() {
     const opts = parseArgs(process.argv.slice(2));
     const versions = readVersions(repoRoot);
-    const { version } = versions;
+    const version = versions.version + (opts.versionSuffix ?? "");
 
     if (opts.checkTag !== undefined) {
         const tag = opts.checkTag.replace(/^refs\/tags\//, "");
@@ -261,7 +266,7 @@ function main() {
         license: template.license,
         repository: template.repository,
         engines: template.engines,
-        publishConfig: { ...template.publishConfig, tag: distTag(version) },
+        publishConfig: { ...template.publishConfig, tag: distTag(versions.version) },
         tsrs: { typescriptVersion: versions.typescriptVersion, typescriptCommit: versions.typescriptCommit },
     };
 
