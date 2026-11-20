@@ -37,13 +37,27 @@ upstream does, and attaches the tarballs to a GitHub release. Nothing goes to np
 
 The packages keep upstream's names, so that Oxlint finds `tsrs-lint` and the launcher finds its platform package.
 Their version is the tag's (`7.1.0-beta.tsrs3-revolugo.1`), which the npm registry does not have: a platform package
-can only come from the release. A consumer installs them by URL and overrides the platform packages that the main
-one names (pnpm, `pnpm-workspace.yaml`):
+can only come from the release.
+
+A consumer installs the main package by URL. pnpm takes no URL for a subdependency (`blockExoticSubdeps`), so the
+platform packages are installed as optional dependencies of the consumer's root package, where the launcher finds
+them, and the ones the main package names are removed (`package.json`, then `pnpm-workspace.yaml`):
+
+```json
+{
+  "devDependencies": {
+    "tsrs": "https://github.com/Revolugo/revolugo-tsrs/releases/download/<tag>/tsrs-<version>.tgz"
+  },
+  "optionalDependencies": {
+    "@tsrs/darwin-arm64": "https://github.com/Revolugo/revolugo-tsrs/releases/download/<tag>/tsrs-darwin-arm64-<version>.tgz",
+    "@tsrs/linux-x64-gnu": "https://github.com/Revolugo/revolugo-tsrs/releases/download/<tag>/tsrs-linux-x64-gnu-<version>.tgz"
+  }
+}
+```
 
 ```yaml
 overrides:
-  tsrs: https://github.com/revolugo/revolugo-tsrs/releases/download/<tag>/tsrs-<version>.tgz
-  '@tsrs/darwin-arm64': https://github.com/revolugo/revolugo-tsrs/releases/download/<tag>/tsrs-darwin-arm64-<version>.tgz
-  '@tsrs/linux-x64-gnu': https://github.com/revolugo/revolugo-tsrs/releases/download/<tag>/tsrs-linux-x64-gnu-<version>.tgz
-  # … one line per platform of the release
+  'tsrs>@tsrs/darwin-arm64': '-'
+  'tsrs>@tsrs/linux-x64-gnu': '-'
+  # … one line per platform of the release, in both files
 ```
