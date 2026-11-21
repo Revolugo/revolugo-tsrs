@@ -1,6 +1,17 @@
 packages:
   - npm
+  - npm/lint-vue-project
   - playground
+# The parsers that the tsrs-lint-vue tests use run without ESLint: do not install it for them.
+packageExtensions:
+  '@typescript-eslint/parser':
+    peerDependenciesMeta:
+      eslint:
+        optional: true
+  vue-eslint-parser:
+    peerDependenciesMeta:
+      eslint:
+        optional: true
 # Keep plugins and tests on the Vite+ toolchain's bundled versions.
 overrides:
   vite@*: "catalog:"

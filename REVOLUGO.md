@@ -1,11 +1,14 @@
 # The Revolugo fork of tsrs
 
-This repository is `oxc-project/tsrs` with two additions to its type-aware linter, `tsrs-lint`, on the `revolugo`
-branch. The Revolugo monorepo type-checks and lints its TypeScript and Vue code with this build alone.
+This repository is `oxc-project/tsrs` with three additions on the `revolugo` branch: two to its type-aware linter,
+`tsrs-lint`, and a command that lints `.vue` files with it. The Revolugo monorepo type-checks and lints its
+TypeScript and Vue code with this build alone.
 
 ## What the fork adds
 
-Both are described in [tools/tsgolint/README.md](tools/tsgolint/README.md#content-mapped-files-and---project-revolugo-fork).
+The first two are described in
+[tools/tsgolint/README.md](tools/tsgolint/README.md#content-mapped-files-and---project-revolugo-fork), the third in
+[docs/LINT_VUE.md](docs/LINT_VUE.md).
 
 - **Rules on content-mapped files.** Upstream type-checks a `.vue` file through a tsconfig `contentMappers` entry, and
   runs no lint rule on it. The fork runs the rules and reports a diagnostic at its place in the `.vue` file, when it is
@@ -13,18 +16,26 @@ Both are described in [tools/tsgolint/README.md](tools/tsgolint/README.md#conten
 - **`--project <tsconfig>`** (`TSRS_LINT_PROJECT`). A run lints each file in the project of the named solution that has
   it, before the tsconfig nearest to the file. The monorepo's type-check projects, which add the Vue content mapper,
   are not the tsconfigs next to its sources.
+- **`tsrs-lint-vue`**, a command of the `tsrs` npm package. Oxlint lints the `<script>` blocks of a `.vue` file,
+  and sends no `.vue` file to `tsrs-lint`. The command reads the same Oxlint configuration file and lints the rest:
+  it runs the rules of the JS plugins that declare `meta.sfc: true` on the `<template>` and the custom blocks, and
+  it sends the `.vue` files to `tsrs-lint` for the type-aware rules. It holds no rule and no configuration of its
+  own. `tsrs-lint rules` lists the rules that `tsrs-lint` implements, which tells the command what to send.
 
-Oxlint sends no `.vue` file to `tsrs-lint`, so the monorepo writes that payload itself (`tools/lint/vue.ts` there).
-
-The changes are in `crates/tsrs_lint` (`engine.rs`, `cli.rs`), with tests in
-`crates/tsrs_lint/tests/integration/headless.rs`
+The linter changes are in `crates/tsrs_lint` (`engine.rs`, `cli.rs`, `registry.rs`), with tests in
+`crates/tsrs_lint/tests/integration`: `headless.rs`
 (`rules_run_on_content_mapped_files_at_their_original_ranges`,
-`project_lints_a_file_in_the_named_solution_before_its_nearest_tsconfig`).
+`project_lints_a_file_in_the_named_solution_before_its_nearest_tsconfig`) and `rules_command.rs`.
+
+The command is in `npm/tsrs`: `bin/tsrs-lint-vue`, `lib/tsrs-lint-vue.js` and `src/tsrs/lintVue`, which
+`npm/build.mjs` compiles with the JS API. Its tests are `npm/tsrs/test/tsrs/lint-vue-*.test.ts`; they take their
+parsers from `npm/lint-vue-project`. `npm/sdk/sync-upstream.mjs` leaves `src/tsrs` and `test/tsrs` alone when it
+copies the upstream JS API.
 
 ## Following upstream
 
 `revolugo` is based on an upstream release tag. To move to a newer one, rebase the branch on that tag, run
-`cargo test -p tsrs_lint`, and release.
+`cargo test -p tsrs_lint` and the tests of the command ([docs/LINT_VUE.md](docs/LINT_VUE.md#tests)), and release.
 
 Drop a change when upstream has it: rules on content-mapped files are tracked upstream with oxc-project/tsrs#876.
 

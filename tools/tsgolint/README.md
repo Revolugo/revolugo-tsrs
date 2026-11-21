@@ -56,6 +56,7 @@ four bytes of little-endian JSON byte length, one byte of message type, then UTF
 Diagnostics and protocol errors go to stdout; CLI errors go to stderr.
 The supported flags are `headless`, `-fix`, `-fix-suggestions`, and `-debug timings`
 (the double-dash flag aliases are also accepted).
+In the revolugo fork, `tsrs-lint rules` prints the name of each implemented rule, one per line, and reads no payload.
 Program construction and binding use the native parallel loader and honor `singleThreaded`.
 Source overrides provide virtual files, directories, directory entries, stat information and real paths,
 so package resolution and include globs work without physical files.
@@ -113,6 +114,10 @@ that has it as a root file. A file that none has falls back to the tsconfig near
 for repositories whose type-check projects are not the tsconfigs next to the sources (a `tsc -b` entry point that adds
 content mappers, for instance), so that the lint sees the types the type check sees. A directory stands for its
 `tsconfig.json`; a tsconfig that does not exist is an error.
+
+The npm package has such a client for `.vue` files: `tsrs-lint-vue` reads an Oxlint configuration file, sends the
+`.vue` files with the type-aware rules of each, and keeps the diagnostics of the `<script>` blocks
+([docs/LINT_VUE.md](../../docs/LINT_VUE.md)). It asks `tsrs-lint rules` which rules to send.
 
 Run imported suites with:
 

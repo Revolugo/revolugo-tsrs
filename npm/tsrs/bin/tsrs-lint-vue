@@ -1,0 +1,12 @@
+#!/usr/bin/env node
+// CommonJS (bin/package.json), like bin/tsrs, so that an older Node gets the message below. The command itself is ESM.
+"use strict";
+const [major, minor] = process.versions.node.split(".").map(Number);
+if (major < 22 || (major === 22 && minor < 18)) {
+    console.error(`tsrs-lint-vue requires Node.js 22.18 or later (this is ${process.versions.node}): it loads plugins that are ES modules, written in TypeScript too.`);
+    process.exit(2);
+}
+import("../lib/tsrs-lint-vue.js").catch(e => {
+    console.error(`tsrs-lint-vue: ${e && e.stack || e}`);
+    process.exit(2);
+});

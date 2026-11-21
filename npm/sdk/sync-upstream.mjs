@@ -206,8 +206,8 @@ function main() {
 
     const managedRoots = [...VERBATIM_DIRS, "test"];
     const existing = new Set(managedRoots.flatMap(root => fs.existsSync(path.join(pkgDir, root)) ? listFiles(path.join(pkgDir, root)).map(r => `${root}/${r}`) : []));
-    // Files under test/ that tsrs adds itself are not upstream-managed.
-    const ownTests = new Set([...existing].filter(rel => rel.startsWith("test/tsrs/")));
+    // Files that tsrs adds itself are not upstream-managed: its tests, and the sources of `tsrs-lint-vue`.
+    const ownFiles = new Set([...existing].filter(rel => rel.startsWith("test/tsrs/") || rel.startsWith("src/tsrs/")));
 
     if (opts.check) {
         const problems = [];
@@ -216,7 +216,7 @@ function main() {
             if (!fs.existsSync(file)) problems.push(`missing ${rel}`);
             else if (!fs.readFileSync(file).equals(data)) problems.push(`differs ${rel}`);
         }
-        for (const rel of existing) if (!outputs.has(rel) && !ownTests.has(rel)) problems.push(`extra ${rel}`);
+        for (const rel of existing) if (!outputs.has(rel) && !ownFiles.has(rel)) problems.push(`extra ${rel}`);
         const manifestFile = path.join(pkgDir, "UPSTREAM.json");
         if (!fs.existsSync(manifestFile) || fs.readFileSync(manifestFile, "utf8") !== manifestText) problems.push("differs UPSTREAM.json");
         if (problems.length) throw new Error(`npm/tsrs is out of sync with ${commit}:\n  ${problems.join("\n  ")}`);
@@ -224,7 +224,7 @@ function main() {
         return;
     }
 
-    for (const rel of existing) if (!outputs.has(rel) && !ownTests.has(rel)) fs.rmSync(path.join(pkgDir, rel));
+    for (const rel of existing) if (!outputs.has(rel) && !ownFiles.has(rel)) fs.rmSync(path.join(pkgDir, rel));
     for (const [rel, data] of outputs) {
         const file = path.join(pkgDir, rel);
         fs.mkdirSync(path.dirname(file), { recursive: true });
