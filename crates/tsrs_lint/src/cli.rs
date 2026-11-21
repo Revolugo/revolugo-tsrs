@@ -1,9 +1,11 @@
 //! The headless command line shared by `tsrs-lint` and `tsrs --lint`: oxlint runs `<binary> headless [flags]` with the
 //! payload on stdin and reads protocol frames from stdout.
+//!
+//! `<binary> rules` lists the rules a payload can name.
 
 use std::io::{self, Read, Write};
 
-use crate::{engine, payload, protocol};
+use crate::{engine, payload, protocol, registry};
 
 /// Runs [`run`] on stdin and stdout on a thread with a large stack (checking recurses deeply), as both binaries do.
 ///
@@ -33,10 +35,12 @@ pub fn main(args: Vec<String>) -> i32 {
     }
 }
 
-/// Parses `headless [--fix] [--fix-suggestions] [--runExternalCode] [--project <tsconfig>] [--debug timings]`.
+/// Parses `headless [--fix] [--fix-suggestions] [--runExternalCode] [--project <tsconfig>] [--debug timings]`, or
+/// `rules`.
 ///
-/// Reads the payload from `input`, lints it from the current directory and writes the frames to `output`. Returns
-/// the exit status.
+/// `headless` reads the payload from `input`, lints it from the current directory and writes the frames to `output`.
+/// `rules` writes the name of each implemented rule to `output`, one per line, and reads nothing. Returns the exit
+/// status.
 pub fn run(
     args: impl IntoIterator<Item = String>,
     input: &mut dyn Read,
@@ -58,10 +62,12 @@ pub fn run(
         ..Default::default()
     };
     let mut headless = false;
+    let mut list_rules = false;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "headless" | "--headless" => headless = true,
+            "rules" => list_rules = true,
             "-fix" | "--fix" => options.fix = true,
             "-fix-suggestions" | "--fix-suggestions" => options.fix_suggestions = true,
             "-runExternalCode" | "--runExternalCode" => options.run_external_code = true,
@@ -82,7 +88,7 @@ pub fn run(
             }
             "--help" | "-h" => {
                 eprintln!(
-                    "Usage: tsrs-lint headless [--fix] [--fix-suggestions] [--runExternalCode] [--project <tsconfig>] [--debug timings]"
+                    "Usage: tsrs-lint headless [--fix] [--fix-suggestions] [--runExternalCode] [--project <tsconfig>] [--debug timings]\n       tsrs-lint rules"
                 );
                 return 0;
             }
@@ -92,8 +98,21 @@ pub fn run(
             }
         }
     }
+    if list_rules {
+        let listed = registry::implemented_rules()
+            .into_iter()
+            .try_for_each(|rule| writeln!(output, "{rule}"))
+            .and_then(|()| output.flush());
+        return match listed {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("could not write the rules: {error}");
+                1
+            }
+        };
+    }
     if !headless {
-        eprintln!("tsrs-lint requires headless");
+        eprintln!("tsrs-lint requires headless or rules");
         return 1;
     }
     let result = (|| {

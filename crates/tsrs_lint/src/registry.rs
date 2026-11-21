@@ -67,6 +67,16 @@ pub const BASELINE_RULES: &[&str] = &[
     "use-unknown-in-catch-callback-variable",
 ];
 
+/// The rules a payload can name: those of the inventory that are implemented, in name order.
+///
+/// `tsrs-lint rules` prints them, for a client that has to tell these rules from the ones another linter runs.
+pub fn implemented_rules() -> Vec<&'static str> {
+    let mut rules: Vec<&'static str> =
+        BASELINE_RULES.iter().copied().filter(|name| require_implemented(name).is_ok()).collect();
+    rules.sort_unstable();
+    rules
+}
+
 pub fn require_implemented(name: &str) -> Result<(), String> {
     if matches!(
         name,
