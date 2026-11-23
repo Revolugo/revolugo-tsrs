@@ -493,6 +493,9 @@ const PARSE_THREAD_CAP: usize = 32;
 /// part of another thread pool", so an embedder calls `worker_pool()` before anything else.
 pub fn worker_pool() -> &'static rayon::ThreadPool {
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    if let Some(pool) = OWN_POOL.with_borrow(|own| own.as_ref()?.get().copied()) {
+        return pool;
+    }
     POOL.get_or_init(|| {
         if tsrs_core::NO_THREADS {
             return rayon::ThreadPoolBuilder::new()
@@ -501,17 +504,68 @@ pub fn worker_pool() -> &'static rayon::ThreadPool {
                 .build()
                 .unwrap();
         }
-        let threads = std::env::var("RAYON_NUM_THREADS")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|&n| n > 0)
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism()
-                    .map_or(1, std::num::NonZero::get)
-                    .min(PARSE_THREAD_CAP)
-            });
-        rayon::ThreadPoolBuilder::new().num_threads(threads).stack_size(256 << 20).build().unwrap()
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(worker_threads())
+            .stack_size(256 << 20)
+            .build()
+            .unwrap()
     })
+}
+
+fn worker_threads() -> usize {
+    std::env::var("RAYON_NUM_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map_or(1, std::num::NonZero::get)
+                .min(PARSE_THREAD_CAP)
+        })
+}
+
+/// A worker pool of its own, for a thread that loads a program while other threads load theirs (revolugo fork):
+/// `use_own_worker_pool`.
+type OwnPool = Arc<OnceLock<&'static rayon::ThreadPool>>;
+
+thread_local! {
+    // Set on a thread that was given a pool (`use_own_worker_pool`) and on that pool's threads: `worker_pool()`
+    // returns it there instead of the shared pool.
+    static OWN_POOL: std::cell::RefCell<Option<OwnPool>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Gives the calling thread the `index`th worker pool of its own, or the shared one back with `None`.
+///
+/// `worker_pool()` returns that pool there until the next call. For a thread that loads a program with content
+/// mappers while other threads load theirs, each with its own index (revolugo fork). The pools are as large as the
+/// shared one, are made on first use and are never freed.
+///
+/// A file of a content mapper is parsed by a job that waits for the mapper's process, which answers one request at a
+/// time. On the shared pool, the jobs of one program then hold every thread while they wait, and the other programs'
+/// jobs wait behind them: the programs load one after another. With a pool each, their mappers work at the same
+/// time.
+pub fn use_own_worker_pool(index: Option<usize>) {
+    static POOLS: Mutex<Vec<OwnPool>> = Mutex::new(Vec::new());
+    let Some(index) = index.filter(|_| !tsrs_core::NO_THREADS) else {
+        OWN_POOL.set(None);
+        return;
+    };
+    let mut pools = POOLS.lock().unwrap();
+    while pools.len() <= index {
+        let own = OwnPool::default();
+        let for_threads = Arc::clone(&own);
+        let pool: &'static rayon::ThreadPool = Box::leak(Box::new(
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(worker_threads())
+                .stack_size(256 << 20)
+                .start_handler(move |_| OWN_POOL.set(Some(Arc::clone(&for_threads))))
+                .build()
+                .unwrap(),
+        ));
+        let _ = own.set(pool);
+        pools.push(own);
+    }
+    OWN_POOL.set(Some(Arc::clone(&pools[index])));
 }
 
 // program.go:305

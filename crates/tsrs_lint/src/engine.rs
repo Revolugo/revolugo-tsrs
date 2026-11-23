@@ -342,12 +342,17 @@ fn run_in_region(
     // Each worker's tsconfigs are parsed into a scratch region of its own, kept until the request ends as the
     // calling thread's is.
     let scratch = Mutex::new(Vec::new());
+    let threads = program_threads(programs.len());
+    // The programs with content mappers that are loaded at once each load on a worker pool of their own
+    // (`lint_program`).
+    let own_pool = AtomicUsize::new(0);
     std::thread::scope(|scope| {
-        for i in 0..program_threads(programs.len()) {
+        for i in 0..threads {
             std::thread::Builder::new()
                 .name(format!("lint-program-{i}"))
                 .stack_size(512 << 20)
                 .spawn_scoped(scope, || {
+                    let own_pool = (threads > 1).then(|| own_pool.fetch_add(1, Ordering::Relaxed));
                     let region = tsrs_core::arena::Region::new_scratch(1 << 20);
                     let entered = region.enter();
                     loop {
@@ -370,6 +375,7 @@ fn run_in_region(
                             &shared,
                             &file_configs,
                             &mut program_timings,
+                            own_pool,
                         );
                         *linted[index].lock().unwrap() = Some((result, output, program_timings));
                     }
@@ -477,6 +483,7 @@ fn lint_program(
     shared: &Arc<Shared>,
     file_configs: &BTreeMap<String, &[ConfiguredRule]>,
     timings: &mut BTreeMap<String, (u64, u64)>,
+    own_pool: Option<usize>,
 ) -> Result<(), String> {
     // Dropped after the program: nothing that outlives a program points into its loader regions.
     let regions = RequestRegions::default();
@@ -500,6 +507,13 @@ fn lint_program(
         }
         return Ok(());
     }
+    // A program with content mappers loads on the worker pool of its thread, when other programs load at the same
+    // time: its parse jobs wait for the mappers' processes, and on the shared pool they would hold every thread
+    // and keep the other programs waiting (`use_own_worker_pool`). Any other program loads on the shared pool.
+    let mapped =
+        config.compiler_options().is_some_and(|options| options.run_external_code.is_true())
+            && !config.content_mappers().is_empty();
+    tsrs_compiler::use_own_worker_pool(own_pool.filter(|_| mapped));
     let program = create_program(
         config,
         Arc::clone(fs),

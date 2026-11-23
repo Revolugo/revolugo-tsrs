@@ -7371,6 +7371,77 @@ fn rules_run_on_content_mapped_files_at_their_original_ranges() {
 }
 
 #[test]
+fn content_mapped_projects_linted_at_once_each_report_their_files() {
+    // Four projects with the header mapper of testdata/contentmapper, each with one file that has a violation of
+    // its own. With cores to spare they are loaded at once, each on a worker pool of its own.
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../testdata/contentmapper");
+    let base = std::env::current_dir().unwrap().join("target/lint-mapped-programs");
+    let tsconfig = std::fs::read_to_string(fixtures.join("types/tsconfig.json")).unwrap();
+    let package = std::fs::read_to_string(fixtures.join("header-mapper/package.json")).unwrap();
+    let mapper = std::fs::read_to_string(fixtures.join("header-mapper/mapper.mjs")).unwrap();
+    let projects = ["one", "two", "three", "four"];
+    let source = |project: &str| {
+        format!("export async function {project}(): Promise<void> {{\n  await '{project}'\n}}\n")
+    };
+    let mut written = vec![
+        ("node_modules/header-mapper/package.json".to_string(), package),
+        ("node_modules/header-mapper/mapper.mjs".to_string(), mapper),
+    ];
+    for project in projects {
+        written.push((format!("{project}/tsconfig.json"), tsconfig.clone()));
+        written.push((format!("{project}/src/a.vue"), source(project)));
+    }
+    for (to, text) in written {
+        let to = base.join(to);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::write(to, text).unwrap();
+    }
+    let file = |project: &str| base.join(project).join("src/a.vue").to_string_lossy().into_owned();
+    let input = json::marshal(&protocol::object([
+        ("version", Value::Integer(2)),
+        (
+            "configs",
+            Value::Array(vec![protocol::object([
+                (
+                    "file_paths",
+                    Value::Array(
+                        projects.iter().map(|project| Value::String(file(project))).collect(),
+                    ),
+                ),
+                (
+                    "rules",
+                    Value::Array(vec![protocol::object([(
+                        "name",
+                        Value::String("await-thenable".into()),
+                    )])]),
+                ),
+            ])]),
+        ),
+    ]))
+    .unwrap();
+
+    let diagnostics = diagnostic_objects(&input, &["--runExternalCode"], &[]);
+    let mut reported: Vec<(String, (usize, usize))> = diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let Value::String(path) = &diagnostic["file_path"] else { panic!("{diagnostic:?}") };
+            (path.clone(), range_of(&Value::Object(diagnostic.clone())))
+        })
+        .collect();
+    reported.sort();
+    let mut expected: Vec<(String, (usize, usize))> = projects
+        .iter()
+        .map(|project| {
+            let pos = source(project).find("await").unwrap();
+            (file(project), (pos, pos + "await".len()))
+        })
+        .collect();
+    expected.sort();
+    assert_eq!(reported, expected, "{diagnostics:?}");
+}
+
+#[test]
 fn project_lints_a_file_in_the_named_solution_before_its_nearest_tsconfig() {
     // src/index.ts has an error under `strict` only. The tsconfig nearest to it is not strict; `check/` is a solution
     // whose referenced project is, over the same file.

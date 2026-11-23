@@ -1,13 +1,13 @@
 # The Revolugo fork of tsrs
 
-This repository is `oxc-project/tsrs` with three additions on the `revolugo` branch: two to its type-aware linter,
+This repository is `oxc-project/tsrs` with four additions on the `revolugo` branch: three to its type-aware linter,
 `tsrs-lint`, and a command that lints `.vue` files with it. The Revolugo monorepo type-checks and lints its
 TypeScript and Vue code with this build alone.
 
 ## What the fork adds
 
 The first two are described in
-[tools/tsgolint/README.md](tools/tsgolint/README.md#content-mapped-files-and---project-revolugo-fork), the third in
+[tools/tsgolint/README.md](tools/tsgolint/README.md#content-mapped-files-and---project-revolugo-fork), the last in
 [docs/LINT_VUE.md](docs/LINT_VUE.md).
 
 - **Rules on content-mapped files.** Upstream type-checks a `.vue` file through a tsconfig `contentMappers` entry, and
@@ -16,6 +16,11 @@ The first two are described in
 - **`--project <tsconfig>`** (`TSRS_LINT_PROJECT`). A run lints each file in the project of the named solution that has
   it, before the tsconfig nearest to the file. The monorepo's type-check projects, which add the Vue content mapper,
   are not the tsconfigs next to its sources.
+- **A worker pool for each content-mapped project.** `tsrs-lint` loads several projects at once, one for every four
+  cores. Upstream loads them all on one worker pool. The parse job of a `.vue` file waits for the mapper's process,
+  and that process answers one request at a time. The jobs of one project then hold every thread, and the other
+  projects wait. The fork gives a project with content mappers a pool of its own while other projects load
+  (`use_own_worker_pool` in `crates/tsrs_compiler/src/program.rs`).
 - **`tsrs-lint-vue`**, a command of the `tsrs` npm package. Oxlint lints the `<script>` blocks of a `.vue` file,
   and sends no `.vue` file to `tsrs-lint`. The command reads the same Oxlint configuration file and lints the rest:
   it runs the rules of the JS plugins that declare `meta.sfc: true` on the `<template>` and the custom blocks, and
@@ -25,6 +30,7 @@ The first two are described in
 The linter changes are in `crates/tsrs_lint` (`engine.rs`, `cli.rs`, `registry.rs`), with tests in
 `crates/tsrs_lint/tests/integration`: `headless.rs`
 (`rules_run_on_content_mapped_files_at_their_original_ranges`,
+`content_mapped_projects_linted_at_once_each_report_their_files`,
 `project_lints_a_file_in_the_named_solution_before_its_nearest_tsconfig`) and `rules_command.rs`.
 
 The command is in `npm/tsrs`: `bin/tsrs-lint-vue`, `lib/tsrs-lint-vue.js` and `src/tsrs/lintVue`, which
