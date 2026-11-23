@@ -3,6 +3,7 @@
 pub mod cli;
 mod go_quote;
 pub mod payload;
+pub mod ported;
 pub mod protocol;
 pub mod registry;
 

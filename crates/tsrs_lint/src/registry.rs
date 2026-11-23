@@ -73,11 +73,16 @@ pub const BASELINE_RULES: &[&str] = &[
 pub fn implemented_rules() -> Vec<&'static str> {
     let mut rules: Vec<&'static str> =
         BASELINE_RULES.iter().copied().filter(|name| require_implemented(name).is_ok()).collect();
+    // Revolugo fork: the rules that are not typescript-eslint's, named with their plugin.
+    rules.extend(crate::ported::RULES);
     rules.sort_unstable();
     rules
 }
 
 pub fn require_implemented(name: &str) -> Result<(), String> {
+    if crate::ported::RULES.contains(&name) {
+        return Ok(());
+    }
     if matches!(
         name,
         "await-thenable"
@@ -154,6 +159,9 @@ pub fn require_implemented(name: &str) -> Result<(), String> {
 pub fn create_rule(
     config: &crate::payload::ConfiguredRule,
 ) -> Result<Box<dyn crate::rule::Rule>, String> {
+    if let Some(rule) = crate::ported::create_rule(config) {
+        return rule;
+    }
     match config.name.as_str() {
         "await-thenable" => crate::rules::await_thenable::AwaitThenable::new(&config.options)
             .map(|rule| Box::new(rule) as Box<dyn crate::rule::Rule>),
