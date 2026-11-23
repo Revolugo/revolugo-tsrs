@@ -1,4 +1,4 @@
-// tsrs-lint-vue: the rule host, which does for a rule on a .vue file what ESLint's `Linter` does. The parsers are
+// tsrs-lint: the rule host, which does for a rule on a .vue file what ESLint's `Linter` does. The parsers are
 // those of npm/lint-vue-project, where the `eslint` package is not installed.
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
@@ -8,15 +8,15 @@ import {
     type LintConfig,
     verify,
     verifyAndFix,
-} from "../../src/tsrs/lintVue/host/host.ts";
+} from "../../src/tsrs/lint/host/host.ts";
 import type {
     AstNode,
     HostedRule,
     LintMessage,
     RuleContext,
-} from "../../src/tsrs/lintVue/host/types.ts";
-import { ConfigurationError } from "../../src/tsrs/lintVue/project.ts";
-import { PROJECT } from "./lint-vue.testUtils.ts";
+} from "../../src/tsrs/lint/host/types.ts";
+import { ConfigurationError } from "../../src/tsrs/lint/project.ts";
+import { PROJECT } from "./lint.testUtils.ts";
 
 const FILE = path.join(PROJECT, "src/components/Sample.vue");
 

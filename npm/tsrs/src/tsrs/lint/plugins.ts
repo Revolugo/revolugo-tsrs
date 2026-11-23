@@ -1,12 +1,19 @@
 /**
  * The JS plugins of the configuration (`jsPlugins`), and the rules of those
- * that the Vue lint hosts.
+ * that the lint runs in place of Oxlint.
  *
  * A plugin is what Oxlint loads: an ES module whose default export is
  * `{ meta: { name }, rules }`. Oxlint runs its rules on the scripts it
- * parses. A plugin with `meta.sfc: true` is one whose rules read a whole .vue
- * file, the `<template>` and the custom blocks included: Oxlint cannot run
- * them, and the rule host does (./host/host.ts), for the .vue files only.
+ * parses. Two things in `meta` give a rule to the lint:
+ *
+ * - `sfc: true` is a plugin whose rules read a whole .vue file, the
+ *   `<template>` and the custom blocks included: Oxlint cannot run them, and
+ *   the rule host does (./host/host.ts), for the .vue files only;
+ * - `native: ["camelcase"]` names the rules that `tsrs-lint` has a port of.
+ *   The plugin does not run them on a script file, and `tsrs-lint` does
+ *   (./tsrsLint.ts). On the `<script>` blocks of a .vue file, which
+ *   `tsrs-lint` sees only as what the content mapper makes of them, the JS
+ *   rule still runs, in Oxlint.
  */
 import {
     existsSync,
@@ -32,6 +39,8 @@ import { ConfigurationError } from "./project.ts";
 export interface Plugin {
     /** What the configuration names the rules of the plugin with: `<name>/<rule>`. */
     name: string;
+    /** The rules that `tsrs-lint` runs on the script files, by the name `tsrs-lint` has for each. */
+    native: Map<string, string>;
     rules: Record<string, unknown>;
     /** Whether the rules read a whole .vue file: the rule host runs them. */
     sfc: boolean;
@@ -176,6 +185,23 @@ function nameOf({ name, specifier }: PluginReference, meta: Record<string, unkno
     return normalizePluginName(packageName);
 }
 
+/**
+ * The rules of `meta.native`, each with the name `tsrs-lint` has for it: `<plugin>/<rule>`, where the plugin is named
+ * as it names itself, whatever alias the configuration gives it.
+ */
+function nativeRules({ specifier }: PluginReference, meta: Record<string, unknown>, name: string): Map<string, string> {
+    const { native } = meta;
+    if (native === undefined) {
+        return new Map();
+    }
+    if (!Array.isArray(native) || native.some(rule => typeof rule !== "string")) {
+        throw new ConfigurationError(`The meta.native of the plugin ${specifier} is not an array of rule names`);
+    }
+    const own = typeof meta["name"] === "string" ? normalizePluginName(meta["name"]) : name;
+
+    return new Map(native.map((rule: string) => [rule, `${own}/${rule}`]));
+}
+
 async function loadPlugin(reference: PluginReference, config: OxlintConfig, root: string): Promise<Plugin> {
     const { specifier } = reference;
     const url = urlOf(specifier, config.directory, root);
@@ -195,8 +221,11 @@ async function loadPlugin(reference: PluginReference, config: OxlintConfig, root
     }
     const meta = isRecord(plugin["meta"]) ? plugin["meta"] : {};
 
+    const name = nameOf(reference, meta);
+
     return {
-        name: nameOf(reference, meta),
+        name,
+        native: nativeRules(reference, meta, name),
         rules: isRecord(plugin["rules"]) ? plugin["rules"] : {},
         sfc: meta["sfc"] === true,
         specifier,
@@ -219,6 +248,13 @@ export async function loadPlugins(config: OxlintConfig, root: string): Promise<P
 
     return plugins;
 }
+
+/**
+ * The name `tsrs-lint` has for each rule that a plugin leaves to it (`meta.native`), by the name the configuration
+ * has for the rule.
+ */
+export const nativeRuleNames = (plugins: readonly Plugin[]): Map<string, string> =>
+    new Map(plugins.flatMap(plugin => [...plugin.native].map(([rule, native]) => [`${plugin.name}/${rule}`, native])));
 
 function isHostedRule(value: unknown): value is HostedRule {
     return isRecord(value) && typeof value["create"] === "function";

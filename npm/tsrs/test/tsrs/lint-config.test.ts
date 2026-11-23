@@ -1,4 +1,4 @@
-// tsrs-lint-vue: how it reads an Oxlint configuration, and how it loads the JS plugins that the configuration names.
+// tsrs-lint: how it reads an Oxlint configuration, and how it loads the JS plugins that the configuration names.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,18 +6,20 @@ import test from "node:test";
 import {
     isIgnored,
     isOff,
+    matchesPattern,
     optionsOf,
     type OxlintConfig,
     readOxlintConfig,
     rulesFor,
-} from "../../src/tsrs/lintVue/oxlintConfig.ts";
+} from "../../src/tsrs/lint/oxlintConfig.ts";
 import {
     hostedRules,
     loadPlugins,
+    nativeRuleNames,
     normalizePluginName,
-} from "../../src/tsrs/lintVue/plugins.ts";
-import { ConfigurationError } from "../../src/tsrs/lintVue/project.ts";
-import { createProject } from "./lint-vue.testUtils.ts";
+} from "../../src/tsrs/lint/plugins.ts";
+import { ConfigurationError } from "../../src/tsrs/lint/project.ts";
+import { createProject } from "./lint.testUtils.ts";
 
 const config = (overrides: OxlintConfig["overrides"]): OxlintConfig => ({
     directory: "/project",
@@ -63,6 +65,27 @@ test("an override does not apply to the files it excludes", () => {
     );
 
     assert.equal(rules.has("vue/x"), false);
+});
+
+test("a glob matches what node:path matchesGlob says it matches, compiled or not", () => {
+    const globs = [
+        "**", "**/*", "**/*.ts", "**/*.{test,spec}.{js,ts,tsx}", "*", "*.*", ".*", "a/**", "a/**/b", "a/*", "**/dist", "dist/**",
+        "**/dist/**", "a/{x,y/z}/b", "a{,b}", "a**c", "a?", "*/*", "**/**/b", "a/**/**", "**/.storybook/**", "a.b", "a+b", "$a|b^",
+        // Not compiled: matchesGlob answers.
+        "{a}", "{a,{b,c}}", "{1..3}", "a}", "[ab]", "!(a)", "a//b", "./a/b", "a/b/", "../a", "a\\*",
+    ];
+    const files = [
+        "a", "b", "ab", "abc", "a/b", "a/c", "a/b/c", "a/x/b", "a/y/z/b", "a/x/y/b", "a/.x/b", ".a", ".a/b", "a/.b", "a.b", "a+b",
+        "$a|b^", "b.ts", ".b.ts", "a/b.ts", "a/.b.ts", "a/b.test.ts", "a/b.spec.tsx", "dist", "x/dist", "a/dist/b", "1", "{a}",
+        "a/.storybook/b.ts", ".storybook/b.ts", "a/b/", "./a/b", "../a", "a//b", "a*", "é/b",
+    ];
+    for (const glob of globs) {
+        assert.deepEqual(
+            files.filter(file => matchesPattern(file, glob)),
+            files.filter(file => path.matchesGlob(file, glob)),
+            glob,
+        );
+    }
 });
 
 test("ignorePatterns leave out a directory at any depth and a rooted path", () => {
@@ -193,6 +216,30 @@ test("a plugin is a path from the configuration's directory or a package of the 
     assert.equal(typeof hosted.ruleOf("local/x")?.create, "function");
     assert.equal(hosted.ruleOf("local/unknown"), undefined);
     assert.equal(hosted.ruleOf("unnamed/y"), undefined);
+});
+
+test("a plugin leaves to tsrs-lint the rules of its meta.native, which tsrs-lint names with the plugin's own name", async t => {
+    const root = createProject(t, {
+        "aliased.json": { jsPlugins: [{ name: "core", specifier: "./js.mjs" }, { name: "anon", specifier: "./anonymous.mjs" }, "./plain.mjs"] },
+        "anonymous.mjs": 'export default { meta: { native: ["b"] }, rules: {} };\n',
+        "bad.json": { jsPlugins: ["./bad.mjs"] },
+        "bad.mjs": plugin({ name: "bad", native: "camelcase" }),
+        "js.mjs": plugin({ name: "eslint-plugin-js", native: ["camelcase", "a"] }),
+        "plain.mjs": plugin({ name: "plain" }),
+    }, []);
+    const load = (file: string): ReturnType<typeof loadPlugins> => loadPlugins(readOxlintConfig(path.join(root, file)), root);
+
+    // A plugin without a name of its own is known to tsrs-lint by the name the configuration has for it.
+    assert.deepEqual(
+        [...nativeRuleNames(await load("aliased.json"))],
+        [["core/camelcase", "js/camelcase"], ["core/a", "js/a"], ["anon/b", "anon/b"]],
+    );
+
+    await assert.rejects(load("bad.json"), (error: unknown) => {
+        assert.ok(error instanceof ConfigurationError, String(error));
+        assert.equal(error.message, "The meta.native of the plugin ./bad.mjs is not an array of rule names");
+        return true;
+    });
 });
 
 test("a plugin that cannot be found, loaded or named is a configuration error", async t => {

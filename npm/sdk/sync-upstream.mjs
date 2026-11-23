@@ -206,7 +206,7 @@ function main() {
 
     const managedRoots = [...VERBATIM_DIRS, "test"];
     const existing = new Set(managedRoots.flatMap(root => fs.existsSync(path.join(pkgDir, root)) ? listFiles(path.join(pkgDir, root)).map(r => `${root}/${r}`) : []));
-    // Files that tsrs adds itself are not upstream-managed: its tests, and the sources of `tsrs-lint-vue`.
+    // Files that tsrs adds itself are not upstream-managed: its tests, and the sources of the lint command (`tsrs-lint [paths]`).
     const ownFiles = new Set([...existing].filter(rel => rel.startsWith("test/tsrs/") || rel.startsWith("src/tsrs/")));
 
     if (opts.check) {

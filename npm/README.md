@@ -14,7 +14,7 @@ tsrs ships on npm the way TypeScript 7 ships its native compiler (`typescript@7`
 
 | package | contents |
 | --- | --- |
-| `tsrs` | `bin/tsrs` (Node launcher), `bin/tsrs-lint` (the same launcher with `--lint`), `bin/tsrs-lint-vue` (revolugo fork: the lint of `.vue` files, see [Type-aware linting](#type-aware-linting)), `lib/` (binary lookup, `version.cjs`), `dist/` + `vendor/` (the JavaScript API, see below, and the compiled `tsrs-lint-vue`), `optionalDependencies` on every platform package |
+| `tsrs` | `bin/tsrs` (Node launcher), `bin/tsrs-lint` (the same launcher with `--lint` for `headless` and `rules`; in the revolugo fork, the lint of a project for any other arguments, see [Type-aware linting](#type-aware-linting)), `lib/` (binary lookup, `version.cjs`), `dist/` + `vendor/` (the JavaScript API, see below, and the compiled lint command), `optionalDependencies` on every platform package |
 | `@tsrs/<os>-<arch>[-<libc>]` | the `tsrs` binary and default TypeScript libraries for one platform, with `os`/`cpu` (and `libc: glibc` or `musl` on Linux) so package managers install only the matching one |
 | `@tsrs/wasm` | the WebAssembly module (`npm/tsrs-wasm`, notes/wasm-build.md): a `tsrs-wasm` command and a `tsc()` API for Node 22+ and browsers, single-threaded; no platform packages |
 
@@ -285,8 +285,9 @@ see [progress](../crates/tsrs_lint/tests/baselines/PROGRESS.md)). The `tsrs-lint
 added, so `OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint oxlint --type-aware` uses it: oxlint runs `<path> headless ...`,
 which the bare `tsrs` would read as a root file.
 
-In the revolugo fork, `tsrs-lint-vue` lints what oxlint cannot see of a `.vue` file: the `<template>`, with the rules
-of the JS plugins of the oxlint configuration that declare `meta.sfc: true`, and the types of the `<script>` blocks,
-with the type-aware rules above. It is JavaScript (`npm/tsrs/src/tsrs/lintVue`, compiled into `dist/tsrs/lintVue`
-with the JS API), needs Node.js 22.18 or later, and takes its parsers from the project it lints: the package gains no
-dependency. See [docs/LINT_VUE.md](../docs/LINT_VUE.md).
+In the revolugo fork, `tsrs-lint [paths]` lints a project with the rules of its oxlint configuration that oxlint does
+not run: the type-aware rules above and the ported rules of JS plugins (`meta.native`), on the script files and the
+`.vue` files, and the rules of the JS plugins that declare `meta.sfc: true`, on the `<template>` of the `.vue`
+files. The command is JavaScript (`npm/tsrs/src/tsrs/lint`, compiled into `dist/tsrs/lint` with the JS API), needs
+Node.js 22.18 or later, and takes its parsers from the project it lints: the package gains no dependency. See
+[docs/LINT.md](../docs/LINT.md).

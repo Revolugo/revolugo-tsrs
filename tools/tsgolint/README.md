@@ -115,9 +115,13 @@ for repositories whose type-check projects are not the tsconfigs next to the sou
 content mappers, for instance), so that the lint sees the types the type check sees. A directory stands for its
 `tsconfig.json`; a tsconfig that does not exist is an error.
 
-The npm package has such a client for `.vue` files: `tsrs-lint-vue` reads an Oxlint configuration file, sends the
-`.vue` files with the type-aware rules of each, and keeps the diagnostics of the `<script>` blocks
-([docs/LINT_VUE.md](../../docs/LINT_VUE.md)). It asks `tsrs-lint rules` which rules to send.
+The npm package has such a client: `tsrs-lint [paths]` reads an Oxlint configuration file and sends the script files
+and the `.vue` files with the rules of each. In a `.vue` file, it keeps the diagnostics of the `<script>` blocks
+([docs/LINT.md](../../docs/LINT.md)). It asks `tsrs-lint rules` which rules to send.
+
+`tsrs-lint rules` also lists rules that are not typescript-eslint's, under the name of a JS plugin (`js/camelcase`).
+They are ports of rules of that plugin (`crates/tsrs_lint/src/ported`). A payload gives such a rule the options of
+the rule as ESLint takes them: an array. Oxlint asks for none of them.
 
 Run imported suites with:
 

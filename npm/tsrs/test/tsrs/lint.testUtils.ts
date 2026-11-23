@@ -1,4 +1,4 @@
-// What the tsrs-lint-vue tests share: the project that provides the parsers (npm/lint-vue-project), temporary
+// What the tsrs-lint tests share: the project that provides the parsers (npm/lint-vue-project), temporary
 // projects to lint, and the command run on its sources.
 import {
     execFileSync,
@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 /** A project that has what the command takes from one: vue-eslint-parser, @typescript-eslint/parser, @vue/compiler-sfc. */
 export const PROJECT: string = fileURLToPath(new URL("../../../lint-vue-project", import.meta.url));
 
-const BIN = fileURLToPath(new URL("../../bin/tsrs-lint-vue", import.meta.url));
+const BIN = fileURLToPath(new URL("../../bin/tsrs-lint", import.meta.url));
 const PROVIDED = ["vue-eslint-parser", "@typescript-eslint/parser", "@vue/compiler-sfc"];
 
 /** A plugin whose rules the rule host runs: `no-v-html` reports, `no-old` reports and fixes. */
@@ -55,7 +55,7 @@ export function createProject(
     provided: readonly string[] = PROVIDED,
 ): string {
     // The command lists the files of the directory it runs in, which is not a symbolic link there.
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tsrs-lint-vue-")));
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tsrs-lint-")));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     for (const name of provided) {
         const link = path.join(root, "node_modules", name);
@@ -77,8 +77,8 @@ export interface Run {
     stdout: string;
 }
 
-/** Runs `tsrs-lint-vue` from its sources, in `cwd`. */
-export function lintVue(cwd: string, args: readonly string[] = [], env: NodeJS.ProcessEnv = process.env): Run {
+/** Runs `tsrs-lint` from its sources, in `cwd`. */
+export function lint(cwd: string, args: readonly string[] = [], env: NodeJS.ProcessEnv = process.env): Run {
     const run = spawnSync(process.execPath, ["--conditions", "@typescript/source", BIN, ...args], {
         cwd,
         encoding: "utf8",

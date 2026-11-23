@@ -1,5 +1,5 @@
 /**
- * What the Vue lint takes from the project it lints. This package depends on nothing: the parsers of a `.vue` file
+ * What the lint takes from the project it lints. This package depends on nothing: the parsers of a `.vue` file
  * are those of the project, so that a rule reads the tree that the project's other tools read.
  */
 import { createRequire } from "node:module";
@@ -20,7 +20,7 @@ export function requireFromProject(root: string, name: string, purpose: string):
     }
     catch (error) {
         throw new ConfigurationError(
-            `Cannot find the package ${name} from ${root}. tsrs-lint-vue ${purpose} with it, and takes it from the project it lints: add ${name} to the project's dependencies.`,
+            `Cannot find the package ${name} from ${root}. tsrs-lint ${purpose} with it, and takes it from the project it lints: add ${name} to the project's dependencies.`,
             { cause: error },
         );
     }

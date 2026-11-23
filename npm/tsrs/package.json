@@ -32,8 +32,7 @@
     ],
     "bin": {
         "tsrs": "./bin/tsrs",
-        "tsrs-lint": "./bin/tsrs-lint",
-        "tsrs-lint-vue": "./bin/tsrs-lint-vue"
+        "tsrs-lint": "./bin/tsrs-lint"
     },
     "exports": {
         "./package.json": "./package.json",
@@ -101,9 +100,9 @@
     },
     "imports": {
         "#getExePath": "./lib/getExePath.js",
-        "#lintVue": {
-            "@typescript/source": "./src/tsrs/lintVue/cli.ts",
-            "default": "./dist/tsrs/lintVue/cli.js"
+        "#lint": {
+            "@typescript/source": "./src/tsrs/lint/cli.ts",
+            "default": "./dist/tsrs/lint/cli.js"
         },
         "#enums/*": {
             "@typescript/source": {

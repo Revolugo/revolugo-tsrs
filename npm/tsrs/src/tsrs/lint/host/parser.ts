@@ -21,7 +21,7 @@ function isParser(value: unknown): value is Parser {
 function parserOf(root: string, name: string, purpose: string): Parser {
     const loaded = requireFromProject(root, name, purpose);
     if (!isParser(loaded)) {
-        throw new TypeError(`${name} is not the parser that the Vue lint expects`);
+        throw new TypeError(`${name} is not the parser that the lint expects`);
     }
 
     return loaded;

@@ -2,7 +2,7 @@ packages:
   - npm
   - npm/lint-vue-project
   - playground
-# The parsers that the tsrs-lint-vue tests use run without ESLint: do not install it for them.
+# The parsers that the tsrs-lint tests use run without ESLint: do not install it for them.
 packageExtensions:
   '@typescript-eslint/parser':
     peerDependenciesMeta:

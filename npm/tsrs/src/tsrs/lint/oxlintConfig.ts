@@ -1,7 +1,7 @@
 /**
- * What an Oxlint configuration file says about a file, for the Vue lint
- * (./cli.ts): Oxlint only lints the `<script>` blocks of a .vue file, so the
- * Vue lint applies the rest of the configuration itself.
+ * What an Oxlint configuration file says about a file, for the lint
+ * (./cli.ts), which runs the rules of the configuration that Oxlint does
+ * not.
  *
  * The rules of a file are the base `rules` and those of each override that
  * matches it, in order, as Oxlint resolves them.
@@ -110,16 +110,99 @@ export function readOxlintConfig(path: string, directory: string = dirname(path)
     };
 }
 
-const matches = (file: string, patterns: readonly string[]): boolean => patterns.some(pattern => matchesGlob(file, pattern));
+/** What a glob is made of when it compiles to a regular expression: no escape, class, range or extglob. */
+const SIMPLE_GLOB = /^[^\\[\]()!+@]*$/u;
+const REGEXP_SPECIAL = /[.$^|]/gu;
+
+/** The alternatives of the first `{a,b}` of `glob`, expanded in turn, or `glob` itself when it has none. */
+function expandBraces(glob: string): string[] | undefined {
+    const open = glob.indexOf("{");
+    if (open === -1) {
+        return glob.includes("}") ? undefined : [glob];
+    }
+    const close = glob.indexOf("}", open);
+    const body = glob.slice(open + 1, close);
+    // Nested braces, `{1..3}` and a `{a}` without a comma are for `matchesGlob`.
+    if (close === -1 || body.includes("{") || body.includes("..") || !body.includes(",")) {
+        return undefined;
+    }
+    const alternatives: string[] = [];
+    for (const part of body.split(",")) {
+        const expanded = expandBraces(glob.slice(0, open) + part + glob.slice(close + 1));
+        if (expanded === undefined) {
+            return undefined;
+        }
+        alternatives.push(...expanded);
+    }
+
+    return alternatives;
+}
+
+/** The source of the regular expression of a glob without braces: a wildcard matches no leading dot of a segment. */
+function segmentsSource(glob: string): string | undefined {
+    const segments = glob.split("/");
+    if (segments.some(segment => segment === "" || segment === "." || segment === "..")) {
+        return undefined;
+    }
+    let source = "";
+    for (const [index, segment] of segments.entries()) {
+        const last = index === segments.length - 1;
+        if (segment === "**") {
+            // Any number of segments, and at the end at least one.
+            source += last ? "(?:(?!\\.)[^/]+/)*(?!\\.)[^/]+" : "(?:(?!\\.)[^/]+/)*";
+            continue;
+        }
+        const body = segment
+            .replaceAll(REGEXP_SPECIAL, String.raw`\$&`)
+            .replaceAll(/\*+/gu, "[^/]*")
+            .replaceAll("?", "[^/]");
+        // `*` alone matches no empty segment.
+        source += `${segment.startsWith(".") ? "" : "(?!\\.)"}${/^\*+$/u.test(segment) ? "[^/]+" : body}${last ? "" : "/"}`;
+    }
+
+    return source;
+}
+
+const matchers = new Map<string, (file: string) => boolean>();
+
+/**
+ * What tells whether a file matches `glob`, as `matchesGlob` does. A lint asks about every file and every glob of
+ * the configuration: a glob that compiles to a regular expression is compiled once.
+ */
+function matcher(glob: string): (file: string) => boolean {
+    let matches = matchers.get(glob);
+    if (matches === undefined) {
+        const sources = SIMPLE_GLOB.test(glob) ? expandBraces(glob)?.map(segmentsSource) : undefined;
+        if (sources === undefined || sources.includes(undefined)) {
+            matches = file => matchesGlob(file, glob);
+        }
+        else {
+            const pattern = new RegExp(`^(?:${sources.join("|")})$`, "u");
+            // A path that is not plain segments is for `matchesGlob` too.
+            matches = file => PLAIN_PATH.test(file) ? pattern.test(file) : matchesGlob(file, glob);
+        }
+        matchers.set(glob, matches);
+    }
+
+    return matches;
+}
+
+/** A relative path of segments that are neither empty, `.` nor `..`. */
+const PLAIN_PATH = /^(?!\.{1,2}(?:\/|$))[^/\\]+(?:\/(?!\.{1,2}(?:\/|$))[^/\\]+)*$/u;
+
+/** Whether `file` matches `glob`, as `matchesGlob` says. */
+export const matchesPattern = (file: string, glob: string): boolean => matcher(glob)(file);
+
+const matches = (file: string, patterns: readonly string[]): boolean => patterns.some(pattern => matchesPattern(file, pattern));
 
 /** Whether `ignorePatterns` leaves `file` (relative to the directory of the configuration) out. */
 export const isIgnored = (config: OxlintConfig, file: string): boolean =>
     config.ignorePatterns.some(
         pattern =>
-            matchesGlob(file, pattern)
-            || matchesGlob(file, `${pattern}/**`)
-            || matchesGlob(file, `**/${pattern}`)
-            || matchesGlob(file, `**/${pattern}/**`),
+            matchesPattern(file, pattern)
+            || matchesPattern(file, `${pattern}/**`)
+            || matchesPattern(file, `**/${pattern}`)
+            || matchesPattern(file, `**/${pattern}/**`),
     );
 
 const OFF = new Set<unknown>([0, "allow", "off"]);

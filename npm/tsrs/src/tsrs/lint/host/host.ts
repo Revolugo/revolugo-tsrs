@@ -1,5 +1,5 @@
 /**
- * The rule host of the Vue lint (../cli.ts): what ESLint's `Linter` does for
+ * The rule host of the lint (../cli.ts): what ESLint's `Linter` does for
  * a rule. It parses a .vue file, creates each rule with a rule context, walks
  * the script tree for the listeners of the rules, and returns their reports,
  * fixed or not.

@@ -1,15 +1,16 @@
-// tsrs-lint-vue, the command: what it lints, prints and exits with. The last test runs the type-aware rules, in the
-// `tsrs` binary of TSRS_BINARY.
+// tsrs-lint, the command: what it lints, prints and exits with. The last tests run the rules of the native linter,
+// in the `tsrs` binary of TSRS_BINARY.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
     createProject,
-    lintVue,
+    lint,
     SFC_PLUGIN,
-} from "./lint-vue.testUtils.ts";
+} from "./lint.testUtils.ts";
 
 const APP = '<script setup lang="ts">\nold()\n</script>\n\n<template>\n  <p v-html="old()" />\n</template>\n';
 const CLEAN = "<template>\n  <p>fine</p>\n</template>\n";
@@ -39,7 +40,7 @@ const project = (t: test.TestContext, files: Readonly<Record<string, unknown>> =
 test("the unix format has one line for each problem and a summary, and a problem fails the lint", t => {
     const root = project(t);
 
-    assert.deepEqual(lintVue(root), {
+    assert.deepEqual(lint(root), {
         status: 1,
         stderr: "",
         stdout: [
@@ -47,7 +48,8 @@ test("the unix format has one line for each problem and a summary, and a problem
             "src/App.vue:6:6: No v-html. [Warning/sfc/no-v-html]",
             "src/App.vue:6:14: Rename old. [Error/sfc/no-old]",
             "src/legacy/Kept.vue:2:6: No v-html. [Warning/sfc/no-v-html]",
-            "Found 4 problems in 4 .vue files.",
+            // The four .vue files that are not ignored, and the two script files.
+            "Found 4 problems in 6 files.",
             "",
         ].join("\n"),
     });
@@ -56,24 +58,32 @@ test("the unix format has one line for each problem and a summary, and a problem
 test("the paths limit the lint, a warning alone fails it, and a lint without a problem succeeds", t => {
     const root = project(t);
 
-    assert.deepEqual(lintVue(root, ["src/legacy"]), {
+    assert.deepEqual(lint(root, ["src/legacy"]), {
         status: 1,
         stderr: "",
-        stdout: "src/legacy/Kept.vue:2:6: No v-html. [Warning/sfc/no-v-html]\nFound 1 problem in 2 .vue files.\n",
+        stdout: "src/legacy/Kept.vue:2:6: No v-html. [Warning/sfc/no-v-html]\nFound 1 problem in 2 files.\n",
     });
-    assert.deepEqual(lintVue(root, ["src/Clean.vue", "src/legacy/Old.vue"]), {
+    assert.deepEqual(lint(root, ["src/Clean.vue", "src/legacy/Old.vue"]), {
         status: 0,
         stderr: "",
-        stdout: "Found 0 problems in 2 .vue files.\n",
+        stdout: "Found 0 problems in 2 files.\n",
     });
-    assert.deepEqual(lintVue(root, ["src/Clean.vue"]).stdout, "Found 0 problems in 1 .vue file.\n");
+    assert.deepEqual(lint(root, ["src/Clean.vue"]).stdout, "Found 0 problems in 1 file.\n");
     // An ignored file is not linted, even when it is named.
-    assert.deepEqual(lintVue(root, ["generated"]).stdout, "Found 0 problems in 0 .vue files.\n");
+    assert.deepEqual(lint(root, ["generated"]).stdout, "Found 0 problems in 0 files.\n");
+});
+
+test("a file that .gitignore names is not linted, tracked or not, as in Oxlint", t => {
+    const root = project(t, { "src/Tracked.vue": APP, "src/Untracked.vue": APP });
+    execFileSync("git", ["add", "src/Tracked.vue"], { cwd: root });
+    fs.appendFileSync(path.join(root, ".gitignore"), "*racked.vue\n");
+
+    assert.deepEqual(lint(root, ["src/Tracked.vue", "src/Untracked.vue", "src/Clean.vue"]).stdout, "Found 0 problems in 1 file.\n");
 });
 
 test("the json format is ESLint's report", t => {
     const root = project(t);
-    const run = lintVue(root, ["--format", "json", "src/App.vue", "src/Clean.vue", "src/legacy"]);
+    const run = lint(root, ["--format", "json", "src/App.vue", "src/Clean.vue", "src/legacy"]);
 
     assert.equal(run.status, 1);
     assert.deepEqual(JSON.parse(run.stdout), [
@@ -90,16 +100,16 @@ test("the json format is ESLint's report", t => {
             messages: [{ column: 6, line: 2, message: "No v-html.", ruleId: "sfc/no-v-html", severity: 1 }],
         },
     ]);
-    assert.deepEqual(lintVue(root, ["-f", "json", "src/Clean.vue"]), { status: 0, stderr: "", stdout: "[]\n" });
+    assert.deepEqual(lint(root, ["-f", "json", "src/Clean.vue"]), { status: 0, stderr: "", stdout: "[]\n" });
 });
 
 test("--fix writes the fixed files and reports what is left", t => {
     const root = project(t);
 
-    assert.deepEqual(lintVue(root, ["--fix", "src/App.vue", "src/Clean.vue"]), {
+    assert.deepEqual(lint(root, ["--fix", "src/App.vue", "src/Clean.vue"]), {
         status: 1,
         stderr: "",
-        stdout: "src/App.vue:6:6: No v-html. [Warning/sfc/no-v-html]\nFound 1 problem in 2 .vue files.\n",
+        stdout: "src/App.vue:6:6: No v-html. [Warning/sfc/no-v-html]\nFound 1 problem in 2 files.\n",
     });
     assert.equal(fs.readFileSync(path.join(root, "src/App.vue"), "utf8"), APP.replaceAll("old()", "renamed()"));
     assert.equal(fs.readFileSync(path.join(root, "src/Clean.vue"), "utf8"), CLEAN);
@@ -108,10 +118,10 @@ test("--fix writes the fixed files and reports what is left", t => {
 
 test("a syntax error of a script is reported without a rule", t => {
     const root = project(t, { "src/Broken.vue": '<script setup lang="ts">\nconst = 1\n</script>\n' });
-    const run = lintVue(root, ["src/Broken.vue"]);
+    const run = lint(root, ["src/Broken.vue"]);
 
     assert.equal(run.status, 1);
-    assert.match(run.stdout, /^src\/Broken\.vue:2:\d+: Parsing error: .* \[Error\/vue\]\nFound 1 problem in 1 \.vue file\.\n$/u);
+    assert.match(run.stdout, /^src\/Broken\.vue:2:\d+: Parsing error: .* \[Error\/vue\]\nFound 1 problem in 1 file\.\n$/u);
 });
 
 test("--config names a configuration elsewhere, and --root the directory it applies to", t => {
@@ -123,13 +133,13 @@ test("--config names a configuration elsewhere, and --root the directory it appl
     });
 
     // Without --root, the globs and the plugin path are relative to config/: the plugin is not there.
-    const relative = lintVue(root, ["--config", "config/elsewhere.json"]);
+    const relative = lint(root, ["--config", "config/elsewhere.json"]);
     assert.equal(relative.status, 2);
-    assert.match(relative.stderr, /^tsrs-lint-vue: Cannot load the plugin \.\/plugins\/sfc\.mjs \(file:.*\/config\/plugins\/sfc\.mjs\)/u);
-    assert.deepEqual(lintVue(root, ["-c", "config/elsewhere.json", "--root", "."]), {
+    assert.match(relative.stderr, /^tsrs-lint: Cannot load the plugin \.\/plugins\/sfc\.mjs \(file:.*\/config\/plugins\/sfc\.mjs\)/u);
+    assert.deepEqual(lint(root, ["-c", "config/elsewhere.json", "--root", "."]), {
         status: 1,
         stderr: "",
-        stdout: "src/App.vue:6:6: No v-html. [Error/renamed/no-v-html]\nFound 1 problem in 5 .vue files.\n",
+        stdout: "src/App.vue:6:6: No v-html. [Error/renamed/no-v-html]\nFound 1 problem in 7 files.\n",
     });
 });
 
@@ -139,29 +149,29 @@ test("a lint that cannot run exits with 2 and says why", t => {
         "bad-severity.json": { jsPlugins: ["./plugins/sfc.mjs"], rules: { "sfc/no-old": "loud" } },
     });
     const failure = (args: readonly string[], cwd = root): string => {
-        const run = lintVue(cwd, args);
+        const run = lint(cwd, args);
         assert.deepEqual({ status: run.status, stdout: run.stdout }, { status: 2, stdout: "" }, run.stderr);
         return run.stderr;
     };
 
-    assert.match(failure(["--unknown"]), /^tsrs-lint-vue: Unknown option '--unknown'.*\nRun tsrs-lint-vue --help for the usage\.\n$/su);
-    assert.equal(failure(["--format", "stylish"]), "tsrs-lint-vue: --format is unix or json, not stylish\nRun tsrs-lint-vue --help for the usage.\n");
-    assert.match(failure(["--config", "missing.json"]), /^tsrs-lint-vue: Cannot read the configuration .*missing\.json: ENOENT/u);
-    assert.equal(failure(["--config", "bad-rule.json"]), "tsrs-lint-vue: No plugin has a rule named sfc/no-such-rule\n");
-    assert.match(failure(["--config", "bad-severity.json"]), /^tsrs-lint-vue: The severity of sfc\/no-old is not one of/u);
+    assert.match(failure(["--unknown"]), /^tsrs-lint: Unknown option '--unknown'.*\nRun tsrs-lint --help for the usage\.\n$/su);
+    assert.equal(failure(["--format", "stylish"]), "tsrs-lint: --format is unix or json, not stylish\nRun tsrs-lint --help for the usage.\n");
+    assert.match(failure(["--config", "missing.json"]), /^tsrs-lint: Cannot read the configuration .*missing\.json: ENOENT/u);
+    assert.equal(failure(["--config", "bad-rule.json"]), "tsrs-lint: No plugin has a rule named sfc/no-such-rule\n");
+    assert.match(failure(["--config", "bad-severity.json"]), /^tsrs-lint: The severity of sfc\/no-old is not one of/u);
 
     // A project without the parsers: the error names the package to install.
     const bare = project(t, {}, []);
     assert.match(
         failure([], bare),
-        /^tsrs-lint-vue: Cannot find the package vue-eslint-parser from .*: add vue-eslint-parser to the project's dependencies\.\n$/u,
+        /^tsrs-lint: Cannot find the package vue-eslint-parser from .*: add vue-eslint-parser to the project's dependencies\.\n$/u,
     );
     const half = project(t, {}, ["vue-eslint-parser"]);
-    assert.match(failure([], half), /^tsrs-lint-vue: Cannot find the package @typescript-eslint\/parser from /u);
+    assert.match(failure([], half), /^tsrs-lint: Cannot find the package @typescript-eslint\/parser from /u);
 
     // Not a git repository: the files cannot be listed.
     fs.rmSync(path.join(bare, ".git"), { recursive: true });
-    assert.match(failure([], bare), /^tsrs-lint-vue: Cannot list the files of .* with git ls-files: /u);
+    assert.match(failure([], bare), /^tsrs-lint: Cannot list the files of .* with git ls-files: /u);
 });
 
 test("a rule that throws fails the lint with the rule, the file and the stack", t => {
@@ -169,20 +179,20 @@ test("a rule that throws fails the lint with the rule, the file and the stack", 
         ".oxlintrc.json": { jsPlugins: ["./plugins/throws.mjs"], rules: { "throws/always": 2 } },
         "plugins/throws.mjs": 'export default { meta: { name: "throws", sfc: true }, rules: { always: { create() { throw new TypeError("boom"); } } } };\n',
     });
-    const run = lintVue(root, ["src/Clean.vue"]);
+    const run = lint(root, ["src/Clean.vue"]);
 
     assert.equal(run.status, 2);
     assert.equal(run.stdout, "");
-    assert.match(run.stderr, /^tsrs-lint-vue: Error: throws\/always on .*\/src\/Clean\.vue: boom\n/u);
+    assert.match(run.stderr, /^tsrs-lint: Error: throws\/always on .*\/src\/Clean\.vue: boom\n/u);
     assert.match(run.stderr, /\[cause\]: TypeError: boom\n\s+at .*create.*plugins\/throws\.mjs/u);
 });
 
 test("--help prints the usage, with the Node.js version the command needs", t => {
-    const run = lintVue(project(t), ["--help"]);
+    const run = lint(project(t), ["--help"]);
 
     assert.equal(run.status, 0);
     assert.equal(run.stderr, "");
-    assert.match(run.stdout, /^Usage: tsrs-lint-vue \[options\] \[paths\.\.\.\]\n/u);
+    assert.match(run.stdout, /^Usage: tsrs-lint \[options\] \[paths\.\.\.\]\n/u);
     assert.match(run.stdout, /Node\.js 22\.18 or later/u);
     for (const option of ["--fix", "--format", "--config", "--root", "--project"]) {
         assert.ok(run.stdout.includes(option), option);
@@ -220,6 +230,8 @@ function vueMapper(): string {
     return mapper.replace(TRANSFORM, () => VUE_TRANSFORM);
 }
 
+const NEEDS_BINARY = { skip: process.env["TSRS_BINARY"] ? false : "needs the tsrs binary of TSRS_BINARY" };
+
 const TYPED = `<script setup lang="ts">
 async function load(): Promise<number> {
   return 1
@@ -234,7 +246,7 @@ await text
 </template>
 `;
 
-test("the type-aware rules run in tsrs-lint through the content mapper, and report in the <script> blocks", { skip: process.env["TSRS_BINARY"] ? false : "needs the tsrs binary of TSRS_BINARY" }, t => {
+test("the rules of typescript-eslint run on a .vue file through the content mapper, and report in the <script> blocks", NEEDS_BINARY, t => {
     const root = project(t, {
         ".oxlintrc.json": {
             overrides: [
@@ -253,7 +265,7 @@ test("the type-aware rules run in tsrs-lint through the content mapper, and repo
         "node_modules/header-mapper/package.json": fs.readFileSync(path.join(HEADER_MAPPER, "package.json"), "utf8"),
         "src/Typed.vue": TYPED,
     });
-    const run = lintVue(root, ["--project", "check/tsconfig.json", "src/Typed.vue", "src/Clean.vue"]);
+    const run = lint(root, ["--project", "check/tsconfig.json", "src/Typed.vue", "src/Clean.vue"]);
 
     // `{{ load() }}` floats a promise too, and tsrs-lint reports it: a template expression is type-checked, not
     // linted. The column of the second report is in characters: tsrs-lint counts the `é` before it as two bytes.
@@ -262,7 +274,7 @@ test("the type-aware rules run in tsrs-lint through the content mapper, and repo
         "src/Typed.vue:5:1 [Error/typescript-eslint(no-floating-promises)]",
         "src/Typed.vue:6:27 [Error/typescript-eslint(no-floating-promises)]",
         "src/Typed.vue:7:1 [Warning/typescript-eslint(await-thenable)]",
-        "Found 3 problems in 2 .vue files.",
+        "Found 3 problems in 2 files.",
         "",
     ]);
     assert.match(run.stdout, /^src\/Typed\.vue:5:1: Promises must be awaited/u);
@@ -270,5 +282,87 @@ test("the type-aware rules run in tsrs-lint through the content mapper, and repo
 
     // The tsconfig with the content mapper is not the one nearest to the file: without --project, tsrs-lint does not
     // see the floating promises.
-    assert.doesNotMatch(lintVue(root, ["src/Typed.vue"]).stdout, /no-floating-promises/u);
+    assert.doesNotMatch(lint(root, ["src/Typed.vue"]).stdout, /no-floating-promises/u);
+});
+
+// Oxlint runs `other`, and leaves `camelcase` to tsrs-lint, which has a port of it under the plugin's own name.
+const NATIVE_PLUGIN = 'export default { meta: { name: "js", native: ["camelcase"] }, rules: { camelcase: { create: () => ({}) }, other: { create: () => ({}) } } };\n';
+
+const SCRIPT = `async function load(): Promise<number> {
+  return 1
+}
+const snake_case = { other_key: 'é' }; load()
+export const value = snake_case.other_key as string
+`;
+
+/** A project whose configuration gives its script files rules of typescript-eslint and a rule that a plugin leaves to tsrs-lint. */
+const scripts = (t: test.TestContext, files: Readonly<Record<string, unknown>> = {}): string =>
+    createProject(t, {
+        ".oxlintrc.json": {
+            // The configuration names the rules of the plugin with an alias.
+            jsPlugins: [{ name: "core", specifier: "./plugins/js.mjs" }],
+            overrides: [{ files: ["**/*.test.ts"], rules: { "core/camelcase": "off" } }],
+            rules: {
+                "core/camelcase": [1, { properties: "never" }],
+                "core/other": 2,
+                "typescript/no-floating-promises": 2,
+                "typescript/no-unnecessary-type-assertion": 2,
+            },
+        },
+        "plugins/js.mjs": NATIVE_PLUGIN,
+        "src/a.test.ts": "export const in_a_test = 1\n",
+        "src/a.ts": SCRIPT,
+        // tsrs-lint sees a .vue file as what the content mapper makes of it: Oxlint runs the JS rule on its script.
+        "src/Snake.vue": '<script setup lang="ts">\nconst snake_case = 1\n</script>\n',
+        "tsconfig.json": { compilerOptions: { module: "esnext", noEmit: true, strict: true, target: "es2022", types: [] }, include: ["src"] },
+        ...files,
+    });
+
+test("the rules that tsrs-lint implements run on the script files: those of typescript-eslint, and those that a plugin leaves to it", NEEDS_BINARY, t => {
+    const root = scripts(t);
+    const run = lint(root);
+
+    // The columns are in characters: tsrs-lint counts the `é` as two bytes.
+    assert.equal(run.stderr, "");
+    assert.deepEqual(run.stdout.split("\n").map(line => line.replace(/: .* \[/u, " [")), [
+        "src/a.ts:4:7 [Warning/core/camelcase]",
+        "src/a.ts:4:40 [Error/typescript-eslint(no-floating-promises)]",
+        // Two rules report at one place: the assertion, and the name it starts with.
+        "src/a.ts:5:22 [Error/typescript-eslint(no-unnecessary-type-assertion)]",
+        "src/a.ts:5:22 [Warning/core/camelcase]",
+        "Found 4 problems in 4 files.",
+        "",
+    ]);
+    assert.match(run.stdout, /^src\/a\.ts:4:7: Identifier 'snake_case' is not in camel case\. \[/u);
+    assert.equal(run.status, 1);
+});
+
+test("--fix applies the fixes of tsrs-lint to the script files, and reports what is left", NEEDS_BINARY, t => {
+    const root = scripts(t);
+    const run = lint(root, ["--fix", "--format", "json", "src/a.ts"]);
+
+    assert.equal(run.stderr, "");
+    assert.deepEqual(
+        JSON.parse(run.stdout).flatMap((file: { messages: { ruleId: string; }[]; }) => file.messages.map(message => message.ruleId)),
+        ["core/camelcase", "typescript-eslint(no-floating-promises)", "core/camelcase"],
+    );
+    assert.equal(fs.readFileSync(path.join(root, "src/a.ts"), "utf8"), SCRIPT.replace(" as string", ""));
+});
+
+test("a rule that a plugin leaves to tsrs-lint, and that tsrs-lint does not have, fails the lint", NEEDS_BINARY, t => {
+    const root = scripts(t, { "plugins/js.mjs": NATIVE_PLUGIN.replace('"camelcase"', '"camelcase", "other"') });
+    const run = lint(root);
+
+    assert.deepEqual({ status: run.status, stdout: run.stdout }, { status: 2, stdout: "" });
+    assert.equal(
+        run.stderr,
+        "tsrs-lint: The plugin of core/other leaves the rule to tsrs-lint (meta.native), and this tsrs-lint has no rule js/other: `tsrs-lint rules` lists those it has\n",
+    );
+});
+
+test("tsrs-lint headless and tsrs-lint rules are the native linter", NEEDS_BINARY, t => {
+    const run = lint(project(t), ["rules"]);
+
+    assert.equal(run.status, 0);
+    assert.ok(run.stdout.split("\n").includes("no-floating-promises"), run.stdout);
 });
