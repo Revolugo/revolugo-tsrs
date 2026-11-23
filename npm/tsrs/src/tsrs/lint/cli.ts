@@ -1,8 +1,10 @@
 /**
- * `tsrs-lint [--fix] [--format unix|json] [--config <file>] [--root <dir>] [--project <tsconfig>] [paths]`:
- * lints the files of a project with the rules of its Oxlint configuration
- * that Oxlint does not run.
+ * `tsrs-lint [--fix] [--format unix|json] [--config <file>] [--root <dir>] [--project <tsconfig>] [--no-oxlint]
+ * [paths]`: lints the files of a project with every rule of its Oxlint
+ * configuration, and prints one report.
  *
+ * - Oxlint runs its own rules and the rules of the JS plugins that the lint
+ *   does not run itself (./oxlint.ts), without `--type-aware`.
  * - The rules that `tsrs-lint headless` implements run there, on the script
  *   files and on the .vue files: the rules of typescript-eslint that need the
  *   types, and the rules that a JS plugin leaves to it (`meta.native`), which
@@ -17,13 +19,13 @@
  *   file (`meta.sfc`) run on vue-eslint-parser's tree, in our own rule host
  *   (./host/host.ts).
  *
- * Oxlint runs the rest: its own rules and the other rules of the JS plugins,
- * without `--type-aware`. Everything is configured in the Oxlint
+ * The three run at the same time. Everything is configured in the Oxlint
  * configuration file, and nothing here is about one project: docs/LINT.md has
  * the contract.
  *
- * `--fix` applies the fixes of the hosted rules, and those of `tsrs-lint` in
- * the script files.
+ * `--fix` applies the fixes of Oxlint, then those of the hosted rules, then
+ * those of `tsrs-lint` in the script files: one after the other, since each
+ * rewrites files that the next one reads.
  */
 import { execFileSync } from "node:child_process";
 import {
@@ -59,6 +61,8 @@ import type {
     OxlintConfig,
     RuleEntry,
 } from "./oxlintConfig.ts";
+import { runOxlint } from "./oxlint.ts";
+import type { OxlintProblem } from "./oxlint.ts";
 import {
     hostedRules,
     loadPlugins,
@@ -96,33 +100,34 @@ const USAGE = `Usage: tsrs-lint [options] [paths...]
        tsrs-lint rules
 
 Lints the files under the paths (default: the current directory, which is the root of the project) with the rules of
-the Oxlint configuration that Oxlint does not run:
+the Oxlint configuration, and prints one report:
 
-  - in the script files and in the <script> blocks of the .vue files, the rules that tsrs-lint implements
+  - Oxlint, from the project, runs its own rules and the rules of the JS plugins that tsrs-lint does not run;
+  - in the script files and in the <script> blocks of the .vue files, tsrs-lint runs the rules that it implements
     (tsrs-lint rules): the rules of typescript-eslint that need the types and, in the script files, the rules that a
     JS plugin leaves to tsrs-lint (meta.native);
-  - in the <template> and the custom blocks of the .vue files, the rules of the JS plugins whose meta.sfc is true.
-
-Run Oxlint without --type-aware for the other rules.
+  - in the <template> and the custom blocks of the .vue files, tsrs-lint runs the rules of the JS plugins whose
+    meta.sfc is true.
 
 Options:
-  --fix                     apply the fixes of the plugin rules, and those of tsrs-lint in the script files
+  --fix                     apply the fixes of Oxlint, of the plugin rules, and of tsrs-lint in the script files
   -f, --format <format>     unix (the default) or json (ESLint's JSON report)
   -c, --config <file>       the Oxlint configuration (default: ${OXLINT_CONFIG} in the current directory)
   --root <dir>              the directory that the configuration applies to: its globs and its relative plugin
                             paths are resolved against it (default: the directory of the configuration file)
   -p, --project <tsconfig>  the solution that tsrs-lint lints the files in (tsrs-lint headless --project)
+  --no-oxlint               leave Oxlint out: lint only with the rules that Oxlint does not run
   -h, --help                print this message
 
 tsrs-lint headless is the backend that Oxlint drives with --type-aware (a payload on stdin, frames on stdout), and
 tsrs-lint rules lists the rules it implements.
 
-It runs on Node.js 22.18 or later: a plugin is an ES module, which may be written in TypeScript. To lint .vue files,
-the project provides vue-eslint-parser and @typescript-eslint/parser (plugin rules) and @vue/compiler-sfc (rules of
-tsrs-lint).
+It runs on Node.js 22.18 or later: a plugin is an ES module, which may be written in TypeScript. The project provides
+oxlint and, to lint .vue files, vue-eslint-parser and @typescript-eslint/parser (plugin rules) and @vue/compiler-sfc
+(rules of tsrs-lint).
 
 Exit status: 0 without a problem, 1 with problems (a warning is one), 2 when the lint could not run (usage,
-configuration, plugin or tsrs-lint error).
+configuration, plugin, Oxlint or tsrs-lint error).
 `;
 
 interface Problem {
@@ -263,7 +268,9 @@ function rulesOf(lint: Lint, file: string): FileRules {
             }
             const options = optionsOf(entry);
             native.push(options.length === 0 ? { name: ported } : { name: ported, options });
-            reported.set(ported, { rule, severity: severityNumber(entry) });
+            // As Oxlint names the rule: it reported it before tsrs-lint had a port of it.
+            const slash = rule.lastIndexOf("/");
+            reported.set(ported, { rule: `${rule.slice(0, slash)}(${rule.slice(slash + 1)})`, severity: severityNumber(entry) });
         }
     }
 
@@ -518,6 +525,7 @@ interface CommandLine {
     fix: boolean;
     format: string;
     help: boolean;
+    oxlint: boolean;
     paths: string[];
     project: string | undefined;
     root: string | undefined;
@@ -526,6 +534,7 @@ interface CommandLine {
 function parseCommandLine(args: readonly string[]): CommandLine {
     try {
         const { positionals, values } = parseArgs({
+            allowNegative: true,
             allowPositionals: true,
             args: [...args],
             options: {
@@ -534,6 +543,7 @@ function parseCommandLine(args: readonly string[]): CommandLine {
                 // `json`: ESLint's report format, for the tools that read one.
                 format: { default: "unix", short: "f", type: "string" },
                 help: { default: false, short: "h", type: "boolean" },
+                oxlint: { default: true, type: "boolean" },
                 project: { short: "p", type: "string" },
                 root: { type: "string" },
             },
@@ -541,12 +551,17 @@ function parseCommandLine(args: readonly string[]): CommandLine {
         if (values.format !== "unix" && values.format !== "json") {
             throw new TypeError(`--format is unix or json, not ${values.format}`);
         }
+        if (values.root !== undefined && values.oxlint) {
+            // Oxlint resolves them against the directory of the configuration, and has no option to say otherwise.
+            throw new TypeError("--root needs --no-oxlint: Oxlint resolves the globs of the configuration against its directory");
+        }
 
         return {
             config: values.config,
             fix: values.fix,
             format: values.format,
             help: values.help,
+            oxlint: values.oxlint,
             paths: positionals,
             project: values.project,
             root: values.root,
@@ -572,12 +587,10 @@ async function run(args: readonly string[], root: string, signal: AbortSignal): 
         configFile,
         commandLine.root === undefined ? undefined : resolve(root, commandLine.root),
     );
-    const files = lintedFiles(
-        { config, root },
-        commandLine.paths.length > 0
-            ? commandLine.paths.map(path => relative(root, resolve(root, path)) || ".")
-            : ["."],
-    );
+    const paths = commandLine.paths.length > 0
+        ? commandLine.paths.map(path => relative(root, resolve(root, path)) || ".")
+        : ["."];
+    const files = lintedFiles({ config, root }, paths);
     const plugins = await loadPlugins(config, root);
     const native = nativeRuleNames(plugins);
     const lint: Lint = {
@@ -590,6 +603,12 @@ async function run(args: readonly string[], root: string, signal: AbortSignal): 
         root,
         signal,
     };
+    const oxlint = (): Promise<OxlintProblem[]> =>
+        commandLine.oxlint
+            ? runOxlint({ config: configFile, fix: lint.fix, paths, root, signal })
+            : Promise.resolve([]);
+    // With --fix, Oxlint goes first: the others read the files that it fixes.
+    const fixedByOxlint = lint.fix ? await oxlint() : undefined;
     const linted = new Map<string, LintedFile>(
         files.map(file => {
             const vue = VUE.test(file);
@@ -597,15 +616,17 @@ async function run(args: readonly string[], root: string, signal: AbortSignal): 
             return [file, { file, rules: rulesOf(lint, file), source: vue ? readFileSync(join(root, file), "utf8") : undefined, vue }];
         }),
     );
-    // tsrs-lint runs while the rule host does. With --fix, it waits: the rule host rewrites the .vue files, which
-    // tsrs-lint reads, a file that it lints as much as a file that another one imports.
-    const early = lint.fix ? undefined : lintNative(lint, linted);
+    // Oxlint and tsrs-lint run while the rule host does. With --fix, tsrs-lint waits: the rule host rewrites the .vue
+    // files, which tsrs-lint reads, a file that it lints as much as a file that another one imports.
+    const early = lint.fix ? undefined : Promise.all([oxlint(), lintNative(lint, linted)]);
     // A failure is reported where the result is awaited, after the rule host.
     early?.catch(() => undefined);
     const hosted = [...linted.values()].flatMap(file => lintHosted(lint, file));
+    const [byOxlint, byTsrsLint] = early === undefined ? [fixedByOxlint ?? [], await lintNative(lint, linted)] : await early;
     const problems = [
+        ...byOxlint,
         ...hosted,
-        ...await (early ?? lintNative(lint, linted)),
+        ...byTsrsLint,
     ].sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.column - b.column);
     process.stdout.write(
         commandLine.format === "json"

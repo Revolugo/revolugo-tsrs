@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 export const PROJECT: string = fileURLToPath(new URL("../../../lint-vue-project", import.meta.url));
 
 const BIN = fileURLToPath(new URL("../../bin/tsrs-lint", import.meta.url));
-const PROVIDED = ["vue-eslint-parser", "@typescript-eslint/parser", "@vue/compiler-sfc"];
+const PROVIDED = ["vue-eslint-parser", "@typescript-eslint/parser", "@vue/compiler-sfc", "oxlint"];
 
 /** A plugin whose rules the rule host runs: `no-v-html` reports, `no-old` reports and fixes. */
 export const SFC_PLUGIN = `
@@ -77,8 +77,12 @@ export interface Run {
     stdout: string;
 }
 
+/** Runs `tsrs-lint` from its sources, in `cwd`, without Oxlint: most tests are about the rules that it does not run. */
+export const lint = (cwd: string, args: readonly string[] = [], env: NodeJS.ProcessEnv = process.env): Run =>
+    lintWithOxlint(cwd, ["--no-oxlint", ...args], env);
+
 /** Runs `tsrs-lint` from its sources, in `cwd`. */
-export function lint(cwd: string, args: readonly string[] = [], env: NodeJS.ProcessEnv = process.env): Run {
+export function lintWithOxlint(cwd: string, args: readonly string[] = [], env: NodeJS.ProcessEnv = process.env): Run {
     const run = spawnSync(process.execPath, ["--conditions", "@typescript/source", BIN, ...args], {
         cwd,
         encoding: "utf8",

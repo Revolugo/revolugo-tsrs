@@ -285,8 +285,8 @@ see [progress](../crates/tsrs_lint/tests/baselines/PROGRESS.md)). The `tsrs-lint
 added, so `OXLINT_TSGOLINT_PATH=node_modules/.bin/tsrs-lint oxlint --type-aware` uses it: oxlint runs `<path> headless ...`,
 which the bare `tsrs` would read as a root file.
 
-In the revolugo fork, `tsrs-lint [paths]` lints a project with the rules of its oxlint configuration that oxlint does
-not run: the type-aware rules above and the ported rules of JS plugins (`meta.native`), on the script files and the
+In the revolugo fork, `tsrs-lint [paths]` lints a project with every rule of its oxlint configuration and prints one
+report. It starts the project's oxlint for oxlint's rules, and runs the others itself: the type-aware rules above and the ported rules of JS plugins (`meta.native`), on the script files and the
 `.vue` files, and the rules of the JS plugins that declare `meta.sfc: true`, on the `<template>` of the `.vue`
 files. The command is JavaScript (`npm/tsrs/src/tsrs/lint`, compiled into `dist/tsrs/lint` with the JS API), needs
 Node.js 22.18 or later, and takes its parsers from the project it lints: the package gains no dependency. See

@@ -1,10 +1,11 @@
 {
     "name": "tsrs-lint-vue-test-project",
     "private": true,
-    "description": "What a project provides to tsrs-lint to lint .vue files, for the tests of the command (npm/tsrs/test/tsrs/lint-*.test.ts): the parsers and the SFC compiler. Not published; nothing here is a dependency of the tsrs package. It is apart from the npm tooling package because @typescript-eslint/parser needs the TypeScript 6 API as `typescript`, which there is the TypeScript 7 build compiler.",
+    "description": "What a project provides to tsrs-lint to lint .vue files, for the tests of the command (npm/tsrs/test/tsrs/lint-*.test.ts): the parsers, the SFC compiler and Oxlint. Not published; nothing here is a dependency of the tsrs package. It is apart from the npm tooling package because @typescript-eslint/parser needs the TypeScript 6 API as `typescript`, which there is the TypeScript 7 build compiler.",
     "devDependencies": {
         "@typescript-eslint/parser": "8.72.2",
         "@vue/compiler-sfc": "3.5.45",
+        "oxlint": "1.93.0",
         "typescript": "npm:@typescript/typescript6@6.0.2",
         "vue-eslint-parser": "10.4.2"
     }

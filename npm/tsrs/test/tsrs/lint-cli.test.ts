@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
     createProject,
     lint,
+    lintWithOxlint,
     SFC_PLUGIN,
 } from "./lint.testUtils.ts";
 
@@ -286,7 +287,8 @@ test("the rules of typescript-eslint run on a .vue file through the content mapp
 });
 
 // Oxlint runs `other`, and leaves `camelcase` to tsrs-lint, which has a port of it under the plugin's own name.
-const NATIVE_PLUGIN = 'export default { meta: { name: "js", native: ["camelcase"] }, rules: { camelcase: { create: () => ({}) }, other: { create: () => ({}) } } };\n';
+// Oxlint takes the options of a rule that declares a schema.
+const NATIVE_PLUGIN = 'export default { meta: { name: "js", native: ["camelcase"] }, rules: { camelcase: { meta: { schema: [{ type: "object" }] }, create: () => ({}) }, other: { create: () => ({}) } } };\n';
 
 const SCRIPT = `async function load(): Promise<number> {
   return 1
@@ -325,15 +327,15 @@ test("the rules that tsrs-lint implements run on the script files: those of type
     // The columns are in characters: tsrs-lint counts the `é` as two bytes.
     assert.equal(run.stderr, "");
     assert.deepEqual(run.stdout.split("\n").map(line => line.replace(/: .* \[/u, " [")), [
-        "src/a.ts:4:7 [Warning/core/camelcase]",
+        "src/a.ts:4:7 [Warning/core(camelcase)]",
         "src/a.ts:4:40 [Error/typescript-eslint(no-floating-promises)]",
         // Two rules report at one place: the assertion, and the name it starts with.
         "src/a.ts:5:22 [Error/typescript-eslint(no-unnecessary-type-assertion)]",
-        "src/a.ts:5:22 [Warning/core/camelcase]",
+        "src/a.ts:5:22 [Warning/core(camelcase)]",
         "Found 4 problems in 4 files.",
         "",
     ]);
-    assert.match(run.stdout, /^src\/a\.ts:4:7: Identifier 'snake_case' is not in camel case\. \[/u);
+    assert.match(run.stdout, /^src\/a\.ts:4:7: Identifier 'snake_case' is not in camel case\. \[Warning\/core\(camelcase\)\]$/mu);
     assert.equal(run.status, 1);
 });
 
@@ -344,7 +346,7 @@ test("--fix applies the fixes of tsrs-lint to the script files, and reports what
     assert.equal(run.stderr, "");
     assert.deepEqual(
         JSON.parse(run.stdout).flatMap((file: { messages: { ruleId: string; }[]; }) => file.messages.map(message => message.ruleId)),
-        ["core/camelcase", "typescript-eslint(no-floating-promises)", "core/camelcase"],
+        ["core(camelcase)", "typescript-eslint(no-floating-promises)", "core(camelcase)"],
     );
     assert.equal(fs.readFileSync(path.join(root, "src/a.ts"), "utf8"), SCRIPT.replace(" as string", ""));
 });
@@ -361,8 +363,70 @@ test("a rule that a plugin leaves to tsrs-lint, and that tsrs-lint does not have
 });
 
 test("tsrs-lint headless and tsrs-lint rules are the native linter", NEEDS_BINARY, t => {
-    const run = lint(project(t), ["rules"]);
+    const run = lintWithOxlint(project(t), ["rules"]);
 
     assert.equal(run.status, 0);
     assert.ok(run.stdout.split("\n").includes("no-floating-promises"), run.stdout);
+});
+
+/** The configuration of `scripts`, with a rule of Oxlint and the rules of its correctness category off. */
+const WITH_OXLINT = {
+    categories: { correctness: "off" },
+    jsPlugins: [{ name: "core", specifier: "./plugins/js.mjs" }],
+    overrides: [{ files: ["**/*.test.ts"], rules: { "core/camelcase": "off" } }],
+    rules: {
+        "core/camelcase": [1, { properties: "never" }],
+        "no-var": 2,
+        "typescript/no-floating-promises": 2,
+    },
+};
+
+test("Oxlint runs with the rest, and the lint prints one report of both", NEEDS_BINARY, t => {
+    const root = scripts(t, { ".oxlintrc.json": WITH_OXLINT, "src/b.ts": "var legacy = 1\nexport { legacy }\n" });
+    const run = lintWithOxlint(root);
+
+    assert.equal(run.stderr, "");
+    assert.deepEqual(run.stdout.split("\n").map(line => line.replace(/: .* \[/u, " [")), [
+        "src/a.ts:4:7 [Warning/core(camelcase)]",
+        "src/a.ts:4:40 [Error/typescript-eslint(no-floating-promises)]",
+        "src/a.ts:5:22 [Warning/core(camelcase)]",
+        "src/b.ts:1:1 [Error/eslint(no-var)]",
+        "Found 4 problems in 5 files.",
+        "",
+    ]);
+    assert.equal(run.status, 1);
+    // A JS rule that Oxlint runs on the script of a .vue file is in the report too: `camelcase` of the plugin does
+    // nothing here.
+    assert.equal(lintWithOxlint(root, ["src/Snake.vue"]).stdout, "Found 0 problems in 1 file.\n");
+});
+
+test("--fix applies the fixes of Oxlint first, then those of tsrs-lint", NEEDS_BINARY, t => {
+    const root = scripts(t, {
+        ".oxlintrc.json": { ...WITH_OXLINT, rules: { ...WITH_OXLINT.rules, "typescript/no-unnecessary-type-assertion": 2 } },
+        "src/b.ts": "var legacy: string = 'x' as string\nexport { legacy }\n",
+    });
+    const run = lintWithOxlint(root, ["--fix", "src/b.ts"]);
+
+    assert.deepEqual(run, { status: 0, stderr: "", stdout: "Found 0 problems in 1 file.\n" });
+    assert.equal(fs.readFileSync(path.join(root, "src/b.ts"), "utf8"), "const legacy: string = 'x'\nexport { legacy }\n");
+});
+
+test("a lint with Oxlint needs the oxlint package of the project, and takes no --root", t => {
+    const root = createProject(t, { ".oxlintrc.json": { rules: { "no-var": 2 } }, "src/a.ts": "var a = 1\n" }, []);
+    const missing = lintWithOxlint(root);
+    assert.deepEqual({ status: missing.status, stdout: missing.stdout }, { status: 2, stdout: "" });
+    assert.match(missing.stderr, /^tsrs-lint: Cannot find the package oxlint from .*: add oxlint to the project's dependencies, or pass --no-oxlint\.\n$/u);
+    assert.equal(lint(root).stdout, "Found 0 problems in 1 file.\n");
+
+    const rooted = lintWithOxlint(root, ["--root", "."]);
+    assert.equal(rooted.status, 2);
+    assert.match(rooted.stderr, /^tsrs-lint: --root needs --no-oxlint: /u);
+});
+
+test("a configuration that Oxlint cannot read fails the lint with what Oxlint says", t => {
+    const root = createProject(t, { ".oxlintrc.json": { rules: { "nope/rule": 2 } }, "src/a.ts": "export const a = 1\n" }, ["oxlint"]);
+    const run = lintWithOxlint(root);
+
+    assert.deepEqual({ status: run.status, stdout: run.stdout }, { status: 2, stdout: "" });
+    assert.match(run.stderr, /oxlint failed \(exit 1\): .*Plugin 'nope' not found/su);
 });

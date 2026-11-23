@@ -26,8 +26,9 @@ The first two are described in
   `js` plugin of [revolugo-lint-plugins](https://github.com/Revolugo/revolugo-lint-plugins), and reports what that
   rule reports. Oxlint runs the rules of a JS plugin on one thread, and these three took most of the time of a lint.
 - **`tsrs-lint [paths]`**, the lint of a project, in the `tsrs` npm package. `tsrs-lint headless` stays the backend
-  that Oxlint drives. With any other arguments, the command reads an Oxlint configuration file and runs the rules
-  of it that Oxlint does not run. It sends the script files and the `.vue` files to one `tsrs-lint headless`, for
+  that Oxlint drives. With any other arguments, the command reads an Oxlint configuration file, runs every rule of
+  it, and prints one report. It starts the project's Oxlint, without `--type-aware`, for the rules that Oxlint
+  runs, and runs the others itself. It sends the script files and the `.vue` files to one `tsrs-lint headless`, for
   the type-aware rules and for the ported rules that a plugin leaves to it (`meta.native`). Oxlint sends no `.vue`
   file there, and a ported rule is not Oxlint's to ask for. The command also runs the rules of the JS plugins that
   declare `meta.sfc: true` on the `<template>` and the custom blocks of the `.vue` files, which Oxlint does not

@@ -1,7 +1,8 @@
-# `tsrs-lint`: lint a project with the rules that Oxlint does not run (revolugo fork)
+# `tsrs-lint`: lint a project with every rule of its Oxlint configuration (revolugo fork)
 
-`tsrs-lint` reads an Oxlint configuration file and runs three kinds of rules of it. Oxlint runs the other rules,
-without `--type-aware`.
+`tsrs-lint` reads an Oxlint configuration file, runs every rule of it, and prints one report. It starts Oxlint itself
+for Oxlint's native rules and for the rules of the JS plugins that it does not run itself. It runs three kinds of
+rules without Oxlint:
 
 - The rules of typescript-eslint that need the types (`typescript/no-floating-promises`), on the script files and
   on the `.vue` files. Oxlint sends no `.vue` file to its type-aware backend. `tsrs-lint` lints a `.vue` file through
@@ -13,20 +14,21 @@ without `--type-aware`.
   files. Oxlint parses only the `<script>` blocks of a `.vue` file.
 
 The first two kinds run in the native linter, `tsrs-lint headless`, in one process for all the files. The third kind
-runs in a rule host written in JavaScript.
+runs in a rule host written in JavaScript. Oxlint, the native linter and the rule host run at the same time.
+`--no-oxlint` leaves Oxlint out, for a client that runs Oxlint itself.
 
 The command ships in the `tsrs` npm package. Its sources are in `npm/tsrs/src/tsrs/lint`.
 
 ## Usage
 
 ```sh
-tsrs-lint [--fix] [--format unix|json] [--config <file>] [--root <dir>] [--project <tsconfig>] [paths...]
+tsrs-lint [--fix] [--format unix|json] [--config <file>] [--root <dir>] [--project <tsconfig>] [--no-oxlint] [paths...]
 tsrs-lint headless [--fix] [--runExternalCode] [--project <tsconfig>]
 tsrs-lint rules
 ```
 
 Run the command from the root of the project. The current directory is where the command lists the files, finds
-`node_modules`, and runs the native linter.
+`node_modules`, and runs Oxlint and the native linter.
 
 `tsrs-lint headless` and `tsrs-lint rules` are the native linter itself. `headless` is the backend that Oxlint
 drives with `--type-aware`: it reads a payload on stdin and writes frames on stdout
@@ -37,9 +39,10 @@ implements. A path named `headless` or `rules` is written `./headless` or `./rul
 | --- | --- |
 | `paths` | The files and directories to lint, relative to the current directory. The default is `.`. |
 | `--fix` | Apply the fixes and write the files. The report is about the fixed files. The fixes of the native linter are applied to the script files only. |
+| `--no-oxlint` | Do not run Oxlint: lint with the rules that Oxlint does not run, and nothing else. |
 | `-f`, `--format` | `unix` (the default) or `json`. |
 | `-c`, `--config` | The Oxlint configuration file. The default is `.oxlintrc.json` in the current directory. |
-| `--root` | The directory that the configuration applies to. The default is the directory of the configuration file. |
+| `--root` | The directory that the configuration applies to. The default is the directory of the configuration file. It needs `--no-oxlint`. |
 | `-p`, `--project` | The tsconfig that `tsrs-lint headless --project` gets. |
 | `-h`, `--help` | Print the usage. |
 
@@ -48,6 +51,8 @@ implements. A path named `headless` or `rules` is written `./headless` or `./rul
 - Node.js 22.18 or later. A plugin is an ES module, and Node.js 22.18 loads one that is written in TypeScript. The
   rest of the `tsrs` package, `tsrs-lint headless` and `tsrs-lint rules` included, still runs on Node.js 16.20.
 - A git repository. The command lists the files with `git ls-files`.
+- `oxlint` in the project, unless `--no-oxlint` is given. The command runs the `oxlint` command of the package that
+  the project resolves, without `--type-aware`.
 - `vue-eslint-parser` and `@typescript-eslint/parser` in the project, when a rule of an `sfc` plugin is on for a
   `.vue` file.
 - `@vue/compiler-sfc` in the project, when the native linter reports something in a `.vue` file.
@@ -87,11 +92,24 @@ keeps the options of the earlier one, unless the severity turns the rule off. A 
 
 Globs and relative plugin paths are resolved against the directory of the configuration file, as in Oxlint. `--root`
 names another directory. Use it for a configuration file that is not in the tree that it configures, a generated one
-for instance:
+for instance. Oxlint has no such option, so `--root` needs `--no-oxlint`:
 
 ```sh
-tsrs-lint --config /tmp/generated.oxlintrc.json --root .
+tsrs-lint --no-oxlint --config /tmp/generated.oxlintrc.json --root .
 ```
+
+## Oxlint
+
+The command runs `oxlint --config <file> --format json --no-error-on-unmatched-pattern [--fix] -- <paths>` with the
+paths that it lints. Oxlint finds its files and applies `ignorePatterns` and `.gitignore` itself. The command adds
+what Oxlint reports to its report, with the rule name that Oxlint gives (`eslint(no-var)`) and the severity of the
+diagnostic.
+
+Oxlint must run without `--type-aware`, which the command does not pass: the native linter runs the type-aware rules.
+Oxlint loads every plugin of `jsPlugins`. A rule that a plugin leaves to the native linter or to the rule host must do
+nothing in Oxlint, except on the `<script>` blocks of a `.vue` file for a ported rule.
+
+A configuration that Oxlint cannot read fails the lint with what Oxlint says, as exit status 2.
 
 ## Plugins
 
@@ -174,7 +192,7 @@ For a script file or a `.vue` file, the command takes the entries named `typescr
 `@typescript-eslint/<name>` that are not off and whose `<name>` the native linter implements. The first option of an
 entry is the options of the rule. A rule of typescript-eslint that the native linter does not implement is Oxlint's.
 
-Do not pass `--type-aware` to Oxlint for the same files: Oxlint would run the same rules a second time, through
+Do not run Oxlint with `--type-aware` on the same files: Oxlint would run the same rules a second time, through
 `tsrs-lint headless`.
 
 ### Ported rules
@@ -226,7 +244,8 @@ covers them. The rules are not written for them: `@click="save"` with an async `
 ### Reports and fixes
 
 A diagnostic of a rule of typescript-eslint has the rule name `typescript-eslint(<name>)`. A diagnostic of a ported
-rule has the name of its entry in the configuration. Both have the severity of the entry. Any other diagnostic, a
+rule has the name that Oxlint gave the rule before: `<plugin>(<rule>)`, with the name that the configuration has for
+the plugin. Both have the severity of the entry. Any other diagnostic, a
 tsconfig or mapper error for instance, is an error at line 1, column 1, named `typescript(<code>)`.
 
 No comment disables a rule.
@@ -234,6 +253,9 @@ No comment disables a rule.
 `--fix` applies the fixes of the native linter to the script files, lints the changed files again, and repeats
 while a pass fixes something, up to 10 passes. A fix that touches a fix already applied waits for the next pass. The
 command does not apply these fixes to a `.vue` file.
+
+With `--fix`, the three parts run one after the other, because each one rewrites files that the next one reads:
+Oxlint first, then the rule host, then the native linter.
 
 The command finds the `tsrs` binary as the other launchers of the package do: `TSRS_BINARY`, or else the platform
 package.
@@ -245,8 +267,9 @@ package.
 ```
 src/App.vue:6:6: 'v-html' directive can lead to XSS attack. [Warning/my-vue/no-v-html]
 src/App.vue:12:1: Promises must be awaited, add void operator to ignore. [Error/typescript-eslint(no-floating-promises)]
-src/load.ts:3:7: Identifier 'page_size' is not in camel case. [Warning/js/camelcase]
-Found 3 problems in 214 files.
+src/load.ts:3:7: Identifier 'page_size' is not in camel case. [Warning/js(camelcase)]
+src/load.ts:8:1: Unexpected var, use let or const instead. [Error/eslint(no-var)]
+Found 4 problems in 214 files.
 ```
 
 `json` prints the report of ESLint's `json` formatter, with the files that have a problem:
@@ -259,7 +282,7 @@ Found 3 problems in 214 files.
 | --- | --- |
 | 0 | No problem. |
 | 1 | At least one problem. A warning is a problem. |
-| 2 | The lint did not run: a usage, configuration or plugin error, a rule that threw, or a `tsrs-lint` failure. The reason is on stderr, and stdout is empty. |
+| 2 | The lint did not run: a usage, configuration or plugin error, a rule that threw, or an Oxlint or `tsrs-lint` failure. The reason is on stderr, and stdout is empty. |
 
 ## Tests
 
