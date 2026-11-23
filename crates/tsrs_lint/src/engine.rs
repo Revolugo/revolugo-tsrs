@@ -352,6 +352,7 @@ fn run_in_region(
                 .name(format!("lint-program-{i}"))
                 .stack_size(512 << 20)
                 .spawn_scoped(scope, || {
+                    // Relaxed: a counter that gives each thread an index of its own.
                     let own_pool = (threads > 1).then(|| own_pool.fetch_add(1, Ordering::Relaxed));
                     let region = tsrs_core::arena::Region::new_scratch(1 << 20);
                     let entered = region.enter();
